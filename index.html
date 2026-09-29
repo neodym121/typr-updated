@@ -50,7 +50,7 @@
           </a>
         </nav>
         <div class="sidebar-footer">
-          <span class="version-text">v0.1.0</span>
+          <span class="version-text">v1.0.0</span>
         </div>
       </aside>
 
@@ -78,28 +78,22 @@
             <h2 class="section-title">Engine</h2>
             <p class="section-desc">Choose your cloud transcription provider</p>
           </div>
+          <div class="engine-tabs">
+            <button id="engine-groq" class="engine-tab active">Groq Cloud</button>
+            <button id="engine-openai" class="engine-tab">OpenAI Compatible</button>
+            <button id="engine-polza" class="engine-tab">Polza</button>
+          </div>
           <div class="settings-list">
-            <div class="setting-row">
-              <div class="setting-label">
-                <span class="label-text">Transcription Engine</span>
-                <span class="label-hint">Select cloud AI speech-to-text service</span>
-              </div>
-              <div class="setting-control">
-                <div class="toggle-group">
-                  <button id="engine-groq" class="toggle-btn active">Groq Cloud</button>
-                  <button id="engine-openai" class="toggle-btn">OpenAI Compatible</button>
-                </div>
-              </div>
-            </div>
-
             <!-- Groq Settings -->
-            <div class="setting-row" id="groq-settings">
-              <div class="setting-label">
-                <span class="label-text">Groq API Key</span>
-                <span class="label-hint">Get your key from console.groq.com</span>
-              </div>
-              <div class="setting-control">
-                <input type="password" id="groq-key" placeholder="gsk_..." />
+            <div id="groq-settings">
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text">Groq API Key</span>
+                  <span class="label-hint">Get your key from console.groq.com</span>
+                </div>
+                <div class="setting-control">
+                  <input type="password" id="groq-key" placeholder="gsk_..." />
+                </div>
               </div>
             </div>
 
@@ -130,6 +124,37 @@
                 </div>
                 <div class="setting-control">
                   <input type="password" id="openai-key" placeholder="sk-..." />
+                </div>
+              </div>
+            </div>
+
+            <!-- Polza Settings -->
+            <div id="polza-settings" class="hidden">
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text">API Key</span>
+                  <span class="label-hint">Get your key from polza.ai/dashboard</span>
+                </div>
+                <div class="setting-control">
+                  <input type="password" id="polza-key" placeholder="pk_..." />
+                </div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text">Model ID</span>
+                  <span class="label-hint">e.g. openai/whisper-large-v3</span>
+                </div>
+                <div class="setting-control">
+                  <input type="text" id="polza-model" placeholder="openai/whisper-large-v3" />
+                </div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text">Provider ID</span>
+                  <span class="label-hint">Sub-provider (leave empty for auto)</span>
+                </div>
+                <div class="setting-control">
+                  <input type="text" id="polza-provider" placeholder="e.g. openai-direct" />
                 </div>
               </div>
             </div>

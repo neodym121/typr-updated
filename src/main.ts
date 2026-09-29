@@ -9,6 +9,9 @@ interface Settings {
   openaiEndpoint: string;
   openaiModel: string;
   openaiApiKey: string;
+  polzaApiKey: string;
+  polzaModel: string;
+  polzaProvider: string;
   recordingMode: string;
   hotkey: string;
 }
@@ -24,12 +27,17 @@ const statusText = document.getElementById("status-text")!;
 const micSelect = document.getElementById("mic-select") as HTMLSelectElement;
 const engineGroq = document.getElementById("engine-groq")!;
 const engineOpenai = document.getElementById("engine-openai")!;
+const enginePolza = document.getElementById("engine-polza")!;
 const groqSettings = document.getElementById("groq-settings")!;
 const openaiSettings = document.getElementById("openai-settings")!;
+const polzaSettings = document.getElementById("polza-settings")!;
 const groqKey = document.getElementById("groq-key") as HTMLInputElement;
 const openaiEndpoint = document.getElementById("openai-endpoint") as HTMLInputElement;
 const openaiModel = document.getElementById("openai-model") as HTMLInputElement;
 const openaiKey = document.getElementById("openai-key") as HTMLInputElement;
+const polzaKey = document.getElementById("polza-key") as HTMLInputElement;
+const polzaModel = document.getElementById("polza-model") as HTMLInputElement;
+const polzaProvider = document.getElementById("polza-provider") as HTMLInputElement;
 const modeToggle = document.getElementById("mode-toggle")!;
 const modePtt = document.getElementById("mode-ptt")!;
 const hotkeyBtn = document.getElementById("hotkey-btn")!;
@@ -111,6 +119,11 @@ async function loadSettings() {
   openaiModel.value = currentSettings.openaiModel || "whisper-1";
   openaiKey.value = currentSettings.openaiApiKey || "";
 
+  // Polza settings
+  polzaKey.value = currentSettings.polzaApiKey || "";
+  polzaModel.value = currentSettings.polzaModel || "openai/whisper-large-v3";
+  polzaProvider.value = currentSettings.polzaProvider || "";
+
   // Recording mode
   setRecordingMode(currentSettings.recordingMode || "toggle");
 
@@ -120,11 +133,12 @@ async function loadSettings() {
 
 function setEngine(engine: string) {
   currentSettings.engine = engine;
-  const isGroq = engine === "groq";
-  engineGroq.classList.toggle("active", isGroq);
-  engineOpenai.classList.toggle("active", !isGroq);
-  groqSettings.classList.toggle("hidden", !isGroq);
-  openaiSettings.classList.toggle("hidden", isGroq);
+  engineGroq.classList.toggle("active", engine === "groq");
+  engineOpenai.classList.toggle("active", engine === "openai");
+  enginePolza.classList.toggle("active", engine === "polza");
+  groqSettings.classList.toggle("hidden", engine !== "groq");
+  openaiSettings.classList.toggle("hidden", engine !== "openai");
+  polzaSettings.classList.toggle("hidden", engine !== "polza");
 }
 
 function setRecordingMode(mode: string) {
@@ -139,6 +153,9 @@ async function saveSettings() {
   currentSettings.openaiEndpoint = openaiEndpoint.value.trim();
   currentSettings.openaiModel = openaiModel.value.trim();
   currentSettings.openaiApiKey = openaiKey.value.trim();
+  currentSettings.polzaApiKey = polzaKey.value.trim();
+  currentSettings.polzaModel = polzaModel.value.trim();
+  currentSettings.polzaProvider = polzaProvider.value.trim();
   await invoke("save_settings", { settings: currentSettings });
 }
 
@@ -153,11 +170,19 @@ engineOpenai.addEventListener("click", () => {
   saveSettings();
 });
 
+enginePolza.addEventListener("click", () => {
+  setEngine("polza");
+  saveSettings();
+});
+
 micSelect.addEventListener("change", () => saveSettings());
 groqKey.addEventListener("change", () => saveSettings());
 openaiEndpoint.addEventListener("change", () => saveSettings());
 openaiModel.addEventListener("change", () => saveSettings());
 openaiKey.addEventListener("change", () => saveSettings());
+polzaKey.addEventListener("change", () => saveSettings());
+polzaModel.addEventListener("change", () => saveSettings());
+polzaProvider.addEventListener("change", () => saveSettings());
 
 modeToggle.addEventListener("click", () => {
   setRecordingMode("toggle");

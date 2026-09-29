@@ -217,6 +217,14 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Another instance was launched — show and focus the existing main window
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(AppState {
             recorder: Recorder::new(),
             settings: Mutex::new(settings),
@@ -243,7 +251,18 @@ fn main() {
                 .icon(tray_icon)
                 .tooltip("Typr")
                 .menu(&tray_menu)
-                .show_menu_on_left_click(true)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click { button, .. } = event {
+                        if button == tauri::tray::MouseButton::Left {
+                            if let Some(window) = tray.app_handle().get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
                 .on_menu_event(|app, event| {
                     if event.id.as_ref() == "exit" {
                         println!("[Typr] Tray Exit clicked, terminating application.");

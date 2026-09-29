@@ -386,6 +386,50 @@ input[type="password"]::placeholder {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
+/* ── Engine Tabs (full-width) ──────────────────────── */
+
+.engine-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.engine-tab {
+  flex: 1;
+  padding: 10px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  position: relative;
+  text-align: center;
+}
+
+.engine-tab:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.engine-tab.active {
+  color: var(--text);
+}
+
+.engine-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px 1px 0 0;
+}
+
 /* ── Buttons ────────────────────────────────────────── */
 
 .btn-primary {

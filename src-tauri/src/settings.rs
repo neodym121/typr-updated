@@ -14,6 +14,10 @@ fn default_openai_model() -> String {
     "whisper-1".to_string()
 }
 
+fn default_polza_model() -> String {
+    "openai/whisper-large-v3".to_string()
+}
+
 fn default_recording_mode() -> String {
     "toggle".to_string()
 }
@@ -35,6 +39,12 @@ pub struct Settings {
     pub openai_model: String,
     #[serde(rename = "openaiApiKey", default)]
     pub openai_api_key: String,
+    #[serde(rename = "polzaApiKey", default)]
+    pub polza_api_key: String,
+    #[serde(rename = "polzaModel", default = "default_polza_model")]
+    pub polza_model: String,
+    #[serde(rename = "polzaProvider", default)]
+    pub polza_provider: String,
     #[serde(rename = "recordingMode", default = "default_recording_mode")]
     pub recording_mode: String,
     #[serde(default = "default_hotkey")]
@@ -50,6 +60,9 @@ impl Default for Settings {
             openai_endpoint: "https://api.openai.com/v1".to_string(),
             openai_model: "whisper-1".to_string(),
             openai_api_key: String::new(),
+            polza_api_key: String::new(),
+            polza_model: "openai/whisper-large-v3".to_string(),
+            polza_provider: String::new(),
             recording_mode: "toggle".to_string(),
             hotkey: "Ctrl+Shift+Space".to_string(),
         }
@@ -96,6 +109,9 @@ mod tests {
         assert_eq!(settings.openai_endpoint, "https://api.openai.com/v1");
         assert_eq!(settings.openai_model, "whisper-1");
         assert_eq!(settings.openai_api_key, "");
+        assert_eq!(settings.polza_api_key, "");
+        assert_eq!(settings.polza_model, "openai/whisper-large-v3");
+        assert_eq!(settings.polza_provider, "");
         assert_eq!(settings.recording_mode, "toggle");
         assert_eq!(settings.hotkey, "Ctrl+Shift+Space");
     }

@@ -8,6 +8,7 @@ use crate::paste::paste_text;
 use crate::settings::Settings;
 use crate::transcribe_groq;
 use crate::transcribe_openai;
+use crate::transcribe_polza;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum RecordingState {
@@ -95,6 +96,14 @@ impl Recorder {
                     &settings.openai_endpoint,
                     &settings.openai_model,
                     &settings.openai_api_key,
+                    &temp_path,
+                ).await?
+            }
+            "polza" => {
+                transcribe_polza::transcribe_polza(
+                    &settings.polza_api_key,
+                    &settings.polza_model,
+                    &settings.polza_provider,
                     &temp_path,
                 ).await?
             }
