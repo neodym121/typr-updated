@@ -47,6 +47,7 @@
   --font-serif: 'Source Serif 4', 'Anthropic Serif', Charter, 'Bitstream Charter', Georgia, serif;
   --font-sans:  'Inter', 'Anthropic Sans', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-mono:  'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, ui-monospace, monospace;
+  --font-log:   'Microsoft Sans Serif', 'MS Sans Serif', Tahoma, sans-serif;
 
   --text-caption:    11px;
   --text-small:      12px;
@@ -57,6 +58,7 @@
 
   /* Shape */
   --radius-control: 8px;
+  --radius-box:     12px;  /* compact settings cards and the log panel */
   --radius-card:    16px;
   --radius-pill:    999px;
 
@@ -144,8 +146,11 @@ button {
 }
 
 .app-mark {
-  color: var(--clay);
+  display: block;
   flex-shrink: 0;
+  /* Let the sidebar's mousedown handler drag the window instead of the image */
+  pointer-events: none;
+  -webkit-user-drag: none;
 }
 
 .app-name {
@@ -161,7 +166,7 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 7px 10px;
   background: var(--surface-hover);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -331,9 +336,9 @@ button {
 
 .content-section {
   display: none;
-  max-width: 760px;
+  max-width: 720px;
   margin: 0 auto;
-  padding: 40px 48px 48px;
+  padding: 32px 36px 36px;
   animation: fadeIn 0.25s ease;
 }
 
@@ -347,7 +352,7 @@ button {
   flex-direction: column;
   height: 100%;
   max-width: none;
-  padding: 40px 32px 20px;
+  padding: 32px 28px 20px;
   /* No slide: a full-height section would briefly overflow and flash a scrollbar */
   animation-name: fadeInOpacity;
 }
@@ -363,7 +368,7 @@ button {
 }
 
 .section-header {
-  margin-bottom: 32px;
+  margin-bottom: 24px;
 }
 
 .section-title {
@@ -385,7 +390,7 @@ button {
   font-size: var(--text-small);
   font-weight: 500;
   color: var(--text-muted);
-  margin: 32px 0 12px 4px;
+  margin: 24px 0 8px 2px;
 }
 
 /* ── Cards & Setting Rows ───────────────────────────── */
@@ -393,16 +398,16 @@ button {
 .card {
   background: var(--surface-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  padding: 4px 24px;
+  border-radius: var(--radius-box);
+  padding: 0 16px;
 }
 
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 32px;
-  padding: 18px 0;
+  gap: 20px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -425,13 +430,13 @@ button {
 
 .label-hint {
   display: block;
-  font-size: 12.5px;
-  line-height: 1.45;
+  font-size: var(--text-small);
+  line-height: 1.4;
   color: var(--text-muted);
 }
 
 .setting-control {
-  flex: 0 1 300px;
+  flex: 0 1 260px;
   min-width: 0;
   display: flex;
   justify-content: flex-end;
@@ -444,9 +449,9 @@ input[type="text"],
 input[type="password"],
 input[type="search"] {
   width: 100%;
-  max-width: 300px;
-  height: 36px;
-  padding: 0 12px;
+  max-width: 260px;
+  height: 32px;
+  padding: 0 10px;
   background: var(--surface-inset);
   color: var(--text-primary);
   border: 1px solid var(--border-strong);
@@ -462,8 +467,8 @@ input[type="search"] {
 select {
   background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239c9a92' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 12px center;
-  padding-right: 34px;
+  background-position: right 10px center;
+  padding-right: 30px;
   text-overflow: ellipsis;
   cursor: pointer;
 }
@@ -501,10 +506,10 @@ input[type="search"]::-webkit-search-cancel-button {
 .segmented {
   display: inline-flex;
   gap: 2px;
-  padding: 3px;
+  padding: 2px;
   background: var(--surface-inset);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 9px;
 }
 
 .segment {
@@ -512,8 +517,8 @@ input[type="search"]::-webkit-search-cancel-button {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 14px;
+  height: 28px;
+  padding: 0 12px;
   border: none;
   border-radius: 7px;
   background: transparent;
@@ -545,7 +550,7 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 
 .engine-tabs {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 /* ── Switch ─────────────────────────────────────────── */
@@ -565,8 +570,8 @@ input[type="search"]::-webkit-search-cancel-button {
 
 .switch-track {
   position: relative;
-  width: 40px;
-  height: 24px;
+  width: 36px;
+  height: 20px;
   border-radius: var(--radius-pill);
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
@@ -575,10 +580,10 @@ input[type="search"]::-webkit-search-cancel-button {
 
 .switch-thumb {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 16px;
-  height: 16px;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--text-muted);
   transition: transform var(--ease), background var(--ease);
@@ -655,8 +660,8 @@ input[type="search"]::-webkit-search-cancel-button {
 kbd {
   display: inline-flex;
   align-items: center;
-  height: 34px;
-  padding: 0 14px;
+  height: 32px;
+  padding: 0 12px;
   background: var(--surface-inset);
   border: 1px solid var(--border-strong);
   border-bottom-width: 2px;
@@ -691,12 +696,12 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .log-toolbar .segment {
-  height: 28px;
+  height: 26px;
   padding: 0 10px;
   font-size: 12.5px;
 }
@@ -717,7 +722,6 @@ kbd {
 
 .log-search {
   flex: 1 1 160px;
-  height: 34px;
 }
 
 input.log-search {
@@ -730,13 +734,14 @@ input.log-search {
   margin-left: auto;
 }
 
+/* Obsidian black — the system's one deliberate tonal break */
 .log-panel {
   position: relative;
   flex: 1;
   min-height: 160px;
-  background: var(--surface-sidebar);
+  background: #000000;
   border: 1px solid var(--border);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-box);
   overflow: hidden;
 }
 
@@ -744,28 +749,28 @@ input.log-search {
   position: absolute;
   inset: 0;
   overflow: auto;
-  padding: 10px 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.55;
+  padding: 6px 0;
+  font-family: var(--font-log);
+  font-size: 11px;
+  line-height: 1.5;
   user-select: text;
   -webkit-user-select: text;
 }
 
 .log-row {
   display: grid;
-  grid-template-columns: 84px 44px 76px minmax(0, 1fr);
-  column-gap: 10px;
+  grid-template-columns: 72px 38px 68px minmax(0, 1fr);
+  column-gap: 8px;
   align-items: baseline;
-  padding: 2px 14px;
+  padding: 1px 12px;
 }
 
 .log-row:hover {
-  background: rgba(248, 248, 246, 0.03);
+  background: rgba(248, 248, 246, 0.05);
 }
 
 .log-row.error {
-  background: rgba(217, 119, 87, 0.07);
+  background: rgba(217, 119, 87, 0.10);
   box-shadow: inset 2px 0 0 var(--clay);
 }
 
@@ -776,9 +781,8 @@ input.log-search {
 }
 
 .log-level {
-  font-size: 10.5px;
-  font-weight: 580;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 
