@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::audio::{self, AudioRecorder};
 use crate::cleanup::cleanup_text;
+use crate::overlay::{self, Indicator};
 use crate::paste::paste_text;
 use crate::settings::Settings;
 use crate::transcribe_groq;
@@ -22,25 +23,16 @@ pub enum RecordingState {
     Transcribing,
 }
 
-fn update_overlay(app: &AppHandle, state: &RecordingState) {
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let class = match state {
-            RecordingState::Ready => "mic",
-            RecordingState::Recording => "mic recording",
-            RecordingState::Transcribing => "mic transcribing",
-        };
-        let js = format!("document.getElementById('mic').className = '{}';", class);
-        if let Err(e) = overlay.eval(&js) {
-            log::debug!("Failed to update overlay: {}", e);
-        }
-    }
-}
-
 fn publish_state(app: &AppHandle, state: &RecordingState) {
     if let Err(e) = app.emit("recording-state", state.clone()) {
         log::warn!("Failed to emit recording-state: {}", e);
     }
-    update_overlay(app, state);
+    let indicator = match state {
+        RecordingState::Ready => Indicator::Idle,
+        RecordingState::Recording => Indicator::Recording,
+        RecordingState::Transcribing => Indicator::Transcribing,
+    };
+    overlay::set_indicator(app, indicator);
 }
 
 /// Shows a failed dictation in the main window and briefly flashes the overlay.
@@ -48,13 +40,7 @@ pub fn notify_error(app: &AppHandle, message: &str) {
     if let Err(e) = app.emit("recording-error", message.to_string()) {
         log::warn!("Failed to emit recording-error: {}", e);
     }
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let js = "(function(){var m=document.getElementById('mic');if(!m)return;\
-                  m.className='mic error';clearTimeout(window.__typrError);\
-                  window.__typrError=setTimeout(function(){\
-                  if(m.className==='mic error')m.className='mic';},2500);})();";
-        let _ = overlay.eval(js);
-    }
+    overlay::flash_error(app);
 }
 
 pub struct Recorder {
@@ -90,6 +76,24 @@ impl Recorder {
         publish_state(app, &RecordingState::Recording);
         log::info!("State: Ready → Recording");
         Ok(())
+    }
+
+    /// Stops an unfinished recording and throws the audio away.
+    pub fn cancel_recording(&self, app: &AppHandle) {
+        let cancelled = {
+            let mut state = self.state.lock().unwrap();
+            if *state == RecordingState::Recording {
+                let _ = self.audio_recorder.lock().unwrap().stop();
+                *state = RecordingState::Ready;
+                true
+            } else {
+                false
+            }
+        };
+        if cancelled {
+            publish_state(app, &RecordingState::Ready);
+            log::info!("Recording cancelled, audio discarded");
+        }
     }
 
     /// Stops the recording, transcribes it and pastes the result.

@@ -222,6 +222,16 @@ button {
   color: var(--clay-light);
 }
 
+/* Hotkey switched off from the tray */
+#status-indicator[data-state="paused"] #status-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--text-faint);
+}
+
+#status-indicator[data-state="paused"] #status-text {
+  color: var(--text-muted);
+}
+
 @keyframes breathe {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }

@@ -705,8 +705,9 @@ hotkeyBtn.addEventListener("click", () => {
 
 // ── Recording status ─────────────────────────────────
 
-type StatusState = "ready" | "recording" | "transcribing" | "error";
+type StatusState = "ready" | "recording" | "transcribing" | "error" | "paused";
 let statusResetTimer: number | undefined;
+let hotkeyEnabled = true;
 
 function setStatus(state: StatusState, text: string, detail = "") {
   statusIndicator.dataset.state = state;
@@ -716,6 +717,15 @@ function setStatus(state: StatusState, text: string, detail = "") {
   statusIndicator.title = detail;
 }
 
+// Idle status: "Ready", or "Hotkey off" while the tray switch is off
+function setIdleStatus() {
+  if (hotkeyEnabled) {
+    setStatus("ready", "Ready");
+  } else {
+    setStatus("paused", "Hotkey off", "Turn it back on from the tray menu");
+  }
+}
+
 function applyRecordingState(state: string) {
   if (state === "Recording") {
     window.clearTimeout(statusResetTimer);
@@ -723,16 +733,27 @@ function applyRecordingState(state: string) {
   } else if (state === "Transcribing") {
     setStatus("transcribing", "Transcribing…");
   } else if (statusIndicator.dataset.state !== "error") {
-    setStatus("ready", "Ready");
+    setIdleStatus();
+  }
+}
+
+function applyHotkeyEnabled(enabled: boolean) {
+  hotkeyEnabled = enabled;
+  const state = statusIndicator.dataset.state;
+  if (state !== "recording" && state !== "transcribing") {
+    window.clearTimeout(statusResetTimer);
+    setIdleStatus();
   }
 }
 
 listen<string>("recording-state", (event) => applyRecordingState(event.payload));
 
+listen<boolean>("hotkey-enabled", (event) => applyHotkeyEnabled(event.payload));
+
 listen<string>("recording-error", (event) => {
   window.clearTimeout(statusResetTimer);
   setStatus("error", "Error", event.payload);
-  statusResetTimer = window.setTimeout(() => setStatus("ready", "Ready"), 12000);
+  statusResetTimer = window.setTimeout(setIdleStatus, 12000);
 });
 
 // Initialize
@@ -744,9 +765,14 @@ getVersion()
     // keep the version from the markup
   });
 
-invoke<string>("get_recording_state")
-  .then(applyRecordingState)
-  .catch((err) => uiLog("warn", "Could not read recording state:", err));
+invoke<boolean>("get_hotkey_enabled")
+  .then(applyHotkeyEnabled)
+  .catch((err) => uiLog("warn", "Could not read hotkey state:", err))
+  .finally(() =>
+    invoke<string>("get_recording_state")
+      .then(applyRecordingState)
+      .catch((err) => uiLog("warn", "Could not read recording state:", err)),
+  );
 
 loadSettings().catch((err) => {
   nativeConsole.error("Failed to load settings:", err);

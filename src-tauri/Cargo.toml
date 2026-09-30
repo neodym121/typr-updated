@@ -1,6 +1,6 @@
 [package]
 name = "typr"
-version = "1.0.2"
+version = "1.0.3"
 description = "A dictation app powered by Whisper"
 authors = ["you"]
 edition = "2021"
@@ -27,3 +27,12 @@ dirs = "6"
 arboard = "3"
 log = "0.4"
 base64 = "0.22"
+
+# Native recording overlay (layered window drawn without a WebView)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+] }

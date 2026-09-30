@@ -1,0 +1,633 @@
+//! Recording indicator in the top-right corner of the primary screen.
+//!
+//! On Windows it is a native click-through layered window drawn in Rust, so
+//! Typr needs no WebView (and no browser process) while it sits in the tray.
+//! Other platforms keep the original WebView overlay (`src/overlay.html`).
+
+use std::f32::consts::{FRAC_PI_4, PI, TAU};
+use tauri::AppHandle;
+
+/// What the indicator shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Indicator {
+    Idle,
+    Recording,
+    Transcribing,
+}
+
+/// Where the indicator goes, derived from the primary monitor.
+#[derive(Debug, Clone, Copy)]
+pub struct Placement {
+    /// Top-left corner and side length in physical pixels
+    pub x: i32,
+    pub y: i32,
+    pub size: i32,
+    pub scale: f64,
+    /// Top-left corner in logical pixels (used by the WebView overlay)
+    pub logical_x: f64,
+    pub logical_y: f64,
+}
+
+const WINDOW_SIZE: f64 = 50.0;
+const OFFSET_FROM_RIGHT: f64 = 60.0;
+const OFFSET_FROM_TOP: f64 = 10.0;
+
+impl Placement {
+    /// `x`, `y`, `width` are the monitor's physical position and width.
+    pub fn for_monitor(x: i32, y: i32, width: u32, scale: f64) -> Self {
+        let scale = if scale > 0.0 { scale } else { 1.0 };
+        let left = width as f64 / scale - OFFSET_FROM_RIGHT;
+        Self {
+            x: x + (left * scale).round() as i32,
+            y: y + (OFFSET_FROM_TOP * scale).round() as i32,
+            size: (WINDOW_SIZE * scale).round().max(1.0) as i32,
+            scale,
+            logical_x: left,
+            logical_y: OFFSET_FROM_TOP,
+        }
+    }
+
+    pub fn fallback() -> Self {
+        Self {
+            x: 1380,
+            y: 10,
+            size: WINDOW_SIZE as i32,
+            scale: 1.0,
+            logical_x: 1380.0,
+            logical_y: 10.0,
+        }
+    }
+}
+
+pub fn create(app: &AppHandle, placement: Placement) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        native::create(placement);
+    }
+    #[cfg(not(target_os = "windows"))]
+    webview::create(app, placement);
+}
+
+pub fn set_indicator(app: &AppHandle, indicator: Indicator) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        native::set_indicator(indicator);
+    }
+    #[cfg(not(target_os = "windows"))]
+    webview::set_indicator(app, indicator);
+}
+
+/// Briefly shows the error look (a Clay ring) after a failed dictation.
+pub fn flash_error(app: &AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        native::flash_error();
+    }
+    #[cfg(not(target_os = "windows"))]
+    webview::flash_error(app);
+}
+
+pub fn set_visible(app: &AppHandle, visible: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        native::set_visible(visible);
+    }
+    #[cfg(not(target_os = "windows"))]
+    webview::set_visible(app, visible);
+}
+
+// ── Rendering ───────────────────────────────────────────
+// Everything is drawn with signed distance functions, which gives
+// anti-aliased edges at any display scale without a graphics library.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+enum Look {
+    Idle,
+    Recording,
+    Transcribing,
+    Error,
+}
+
+#[derive(Clone, Copy)]
+struct Paint {
+    rgb: [f32; 3],
+    alpha: f32,
+}
+
+fn paint(r: u8, g: u8, b: u8, alpha: f32) -> Paint {
+    Paint {
+        rgb: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0],
+        alpha,
+    }
+}
+
+/// Renders one frame as premultiplied BGRA, top-down rows, `size` × `size` pixels.
+/// `t` is the time in seconds since the current look appeared (drives animations).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn render(look: Look, t: f32, size: usize, scale: f32) -> Vec<u8> {
+    let mut frame = vec![0u8; size * size * 4];
+    let s = scale.max(0.5);
+    let center = size as f32 / 2.0;
+    let radius = 20.0 * s;
+
+    let dark = paint(31, 30, 29, 0.94);
+    let clay = paint(217, 119, 87, 1.0);
+    let bone = paint(248, 248, 246, 1.0);
+    let pebble = paint(156, 154, 146, 1.0);
+
+    // fill, border, icon, optional halo (paint, extra radius in logical px)
+    let (fill, border, icon, halo) = match look {
+        Look::Idle => (dark, paint(248, 248, 246, 0.14), pebble, None),
+        Look::Recording => {
+            // Ring that grows and fades, then comes back (1.4 s cycle)
+            let phase = (t / 1.4).fract();
+            let wave = if phase < 0.5 { phase * 2.0 } else { (1.0 - phase) * 2.0 };
+            (
+                clay,
+                paint(248, 248, 246, 0.22),
+                bone,
+                Some((paint(217, 119, 87, 0.5 * (1.0 - wave)), 4.0 * wave)),
+            )
+        }
+        Look::Transcribing => (dark, paint(248, 248, 246, 0.2), bone, None),
+        Look::Error => (dark, clay, clay, Some((paint(217, 119, 87, 0.35), 3.0))),
+    };
+    let spinner_head = t * TAU / 0.9;
+
+    for py in 0..size {
+        for px in 0..size {
+            let x = px as f32 + 0.5;
+            let y = py as f32 + 0.5;
+            let dx = x - center;
+            let dy = y - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let mut pixel = [0.0f32; 4];
+
+            // Soft shadow, slightly below the disc
+            let shadow_dist = (dx * dx + (dy - 2.0 * s).powi(2)).sqrt();
+            let shadow = 0.28 * ((radius + 2.0 * s - shadow_dist) / (5.0 * s)).clamp(0.0, 1.0);
+            over(&mut pixel, [0.0, 0.0, 0.0], shadow);
+
+            if let Some((glow, spread)) = halo {
+                over(&mut pixel, glow.rgb, glow.alpha * coverage(dist - (radius + spread * s)));
+            }
+
+            over(&mut pixel, fill.rgb, fill.alpha * coverage(dist - radius));
+
+            // 1px border just inside the edge
+            let border_sdf = (dist - radius).max(radius - s - dist);
+            over(&mut pixel, border.rgb, border.alpha * coverage(border_sdf));
+
+            if look == Look::Transcribing {
+                // Quarter arc spinning around the edge (0.9 s per turn)
+                let ring = (dist - radius).abs() - s;
+                let angle = dx.atan2(-dy);
+                let offset = wrap_angle(angle - spinner_head);
+                let sector = (offset.abs() - FRAC_PI_4) * dist;
+                over(&mut pixel, bone.rgb, coverage(ring.max(sector)));
+            }
+
+            // Microphone glyph: 24-unit icon drawn 18 logical px wide, centred
+            let glyph = mic_sdf((x / s - 16.0) / 0.75, (y / s - 16.0) / 0.75) * 0.75 * s;
+            over(&mut pixel, icon.rgb, icon.alpha * coverage(glyph));
+
+            let i = (py * size + px) * 4;
+            frame[i] = to_byte(pixel[2]);
+            frame[i + 1] = to_byte(pixel[1]);
+            frame[i + 2] = to_byte(pixel[0]);
+            frame[i + 3] = to_byte(pixel[3]);
+        }
+    }
+
+    frame
+}
+
+/// Distance to the microphone shape in its 24×24 icon space (negative inside).
+fn mic_sdf(x: f32, y: f32) -> f32 {
+    // Capsule body: segment (12,5)–(12,11), radius 3
+    let body_y = y.clamp(5.0, 11.0);
+    let body = ((x - 12.0).powi(2) + (y - body_y).powi(2)).sqrt() - 3.0;
+
+    // Stand: lower half of a ring around (12,11), radius 6, 2 units thick
+    let ring = (((x - 12.0).powi(2) + (y - 11.0).powi(2)).sqrt() - 6.0).abs() - 1.0;
+    let stand = ring.max(11.0 - y);
+
+    // Stem: box centred at (12,19), half size 1×2
+    let qx = (x - 12.0).abs() - 1.0;
+    let qy = (y - 19.0).abs() - 2.0;
+    let stem = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0);
+
+    body.min(stand).min(stem)
+}
+
+/// Pixel coverage from a signed distance in physical pixels.
+fn coverage(sdf: f32) -> f32 {
+    (0.5 - sdf).clamp(0.0, 1.0)
+}
+
+/// Premultiplied source-over blending.
+fn over(pixel: &mut [f32; 4], rgb: [f32; 3], alpha: f32) {
+    if alpha <= 0.0 {
+        return;
+    }
+    let alpha = alpha.min(1.0);
+    let keep = 1.0 - alpha;
+    pixel[0] = rgb[0] * alpha + pixel[0] * keep;
+    pixel[1] = rgb[1] * alpha + pixel[1] * keep;
+    pixel[2] = rgb[2] * alpha + pixel[2] * keep;
+    pixel[3] = alpha + pixel[3] * keep;
+}
+
+fn wrap_angle(angle: f32) -> f32 {
+    let mut a = angle % TAU;
+    if a > PI {
+        a -= TAU;
+    } else if a < -PI {
+        a += TAU;
+    }
+    a
+}
+
+fn to_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+// ── Windows: native layered window ──────────────────────
+
+#[cfg(target_os = "windows")]
+mod native {
+    use super::{render, Indicator, Look, Placement};
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicU8, Ordering};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+        SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
+        DIB_RGB_COLORS,
+    };
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, KillTimer, PostMessageW,
+        RegisterClassExW, SetTimer, ShowWindow, TranslateMessage, UpdateLayeredWindow, MSG,
+        SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_APP, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    };
+
+    const WM_REFRESH: u32 = WM_APP + 1;
+    const ANIMATION_TIMER: usize = 1;
+    const ERROR_TIMER: usize = 2;
+    const FRAME_MS: u32 = 33;
+    const ERROR_MS: u64 = 2500;
+
+    const STATE_IDLE: u8 = 0;
+    const STATE_RECORDING: u8 = 1;
+    const STATE_TRANSCRIBING: u8 = 2;
+
+    // Written from any thread; the window thread reads them on WM_REFRESH
+    static WINDOW: AtomicIsize = AtomicIsize::new(0);
+    static STATE: AtomicU8 = AtomicU8::new(STATE_IDLE);
+    static VISIBLE: AtomicBool = AtomicBool::new(true);
+    static ERROR_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+
+    thread_local! {
+        static PLACEMENT: Cell<Option<Placement>> = Cell::new(None);
+        // The look on screen and when it appeared (for animations)
+        static SHOWN: Cell<(Look, Instant)> = Cell::new((Look::Idle, Instant::now()));
+    }
+
+    pub fn create(placement: Placement) {
+        let spawned = std::thread::Builder::new()
+            .name("typr-overlay".to_string())
+            .spawn(move || unsafe { run(placement) });
+        if let Err(e) = spawned {
+            log::error!("Failed to start the overlay thread: {}", e);
+        }
+    }
+
+    pub fn set_indicator(indicator: Indicator) {
+        let value = match indicator {
+            Indicator::Idle => STATE_IDLE,
+            Indicator::Recording => STATE_RECORDING,
+            Indicator::Transcribing => STATE_TRANSCRIBING,
+        };
+        STATE.store(value, Ordering::SeqCst);
+        request_refresh();
+    }
+
+    pub fn flash_error() {
+        ERROR_UNTIL_MS.store(now_ms() + ERROR_MS, Ordering::SeqCst);
+        request_refresh();
+    }
+
+    pub fn set_visible(visible: bool) {
+        VISIBLE.store(visible, Ordering::SeqCst);
+        request_refresh();
+    }
+
+    fn request_refresh() {
+        let hwnd = WINDOW.load(Ordering::SeqCst);
+        if hwnd != 0 {
+            unsafe {
+                PostMessageW(hwnd as HWND, WM_REFRESH, 0, 0);
+            }
+        }
+    }
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn current_look() -> Look {
+        match STATE.load(Ordering::SeqCst) {
+            STATE_RECORDING => Look::Recording,
+            STATE_TRANSCRIBING => Look::Transcribing,
+            _ if now_ms() < ERROR_UNTIL_MS.load(Ordering::SeqCst) => Look::Error,
+            _ => Look::Idle,
+        }
+    }
+
+    unsafe fn run(placement: Placement) {
+        PLACEMENT.with(|cell| cell.set(Some(placement)));
+
+        let class_name: Vec<u16> = "TyprOverlay"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let instance = GetModuleHandleW(std::ptr::null());
+
+        let mut class: WNDCLASSEXW = std::mem::zeroed();
+        class.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
+        class.lpfnWndProc = Some(window_proc);
+        class.hInstance = instance;
+        class.lpszClassName = class_name.as_ptr();
+        if RegisterClassExW(&class) == 0 {
+            log::error!("Failed to register the overlay window class");
+            return;
+        }
+
+        // Click-through, always on top, never activated, hidden from Alt+Tab and the taskbar
+        let hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            class_name.as_ptr(),
+            class_name.as_ptr(),
+            WS_POPUP,
+            placement.x,
+            placement.y,
+            placement.size,
+            placement.size,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        );
+        if hwnd.is_null() {
+            log::error!("Failed to create the overlay window");
+            return;
+        }
+        WINDOW.store(hwnd as isize, Ordering::SeqCst);
+        log::info!(
+            "Overlay created at ({}, {}), {} px (native, no WebView)",
+            placement.x,
+            placement.y,
+            placement.size
+        );
+
+        refresh(hwnd);
+
+        let mut message: MSG = std::mem::zeroed();
+        while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+
+    unsafe extern "system" fn window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match message {
+            WM_REFRESH => {
+                refresh(hwnd);
+                0
+            }
+            WM_TIMER => {
+                if wparam == ERROR_TIMER {
+                    KillTimer(hwnd, ERROR_TIMER);
+                    refresh(hwnd);
+                } else {
+                    draw(hwnd);
+                }
+                0
+            }
+            _ => DefWindowProcW(hwnd, message, wparam, lparam),
+        }
+    }
+
+    unsafe fn refresh(hwnd: HWND) {
+        if !VISIBLE.load(Ordering::SeqCst) {
+            KillTimer(hwnd, ANIMATION_TIMER);
+            KillTimer(hwnd, ERROR_TIMER);
+            ShowWindow(hwnd, SW_HIDE);
+            return;
+        }
+
+        let look = current_look();
+        SHOWN.with(|shown| {
+            if shown.get().0 != look {
+                shown.set((look, Instant::now()));
+            }
+        });
+
+        // Animate only while something moves; idle costs no CPU at all
+        if look == Look::Recording || look == Look::Transcribing {
+            SetTimer(hwnd, ANIMATION_TIMER, FRAME_MS, None);
+        } else {
+            KillTimer(hwnd, ANIMATION_TIMER);
+        }
+        if look == Look::Error {
+            let remaining = ERROR_UNTIL_MS
+                .load(Ordering::SeqCst)
+                .saturating_sub(now_ms())
+                .max(1);
+            SetTimer(hwnd, ERROR_TIMER, remaining as u32, None);
+        }
+
+        draw(hwnd);
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    unsafe fn draw(hwnd: HWND) {
+        let Some(placement) = PLACEMENT.with(|cell| cell.get()) else {
+            return;
+        };
+        let (look, since) = SHOWN.with(|shown| shown.get());
+        let size = placement.size.max(1);
+        let pixels = render(
+            look,
+            since.elapsed().as_secs_f32(),
+            size as usize,
+            placement.scale as f32,
+        );
+
+        let screen = GetDC(std::ptr::null_mut());
+        let memory = CreateCompatibleDC(screen);
+
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = size;
+        info.bmiHeader.biHeight = -size; // negative: top-down rows
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = 0; // BI_RGB
+
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(
+            memory,
+            &info,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
+        if !bitmap.is_null() && !bits.is_null() {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits as *mut u8, pixels.len());
+            let previous = SelectObject(memory, bitmap);
+
+            let position = POINT {
+                x: placement.x,
+                y: placement.y,
+            };
+            let extent = SIZE { cx: size, cy: size };
+            let origin = POINT { x: 0, y: 0 };
+            let blend = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: AC_SRC_ALPHA as u8,
+            };
+            UpdateLayeredWindow(
+                hwnd,
+                screen,
+                &position,
+                &extent,
+                memory,
+                &origin,
+                0,
+                &blend,
+                ULW_ALPHA,
+            );
+
+            SelectObject(memory, previous);
+            DeleteObject(bitmap);
+        }
+
+        DeleteDC(memory);
+        ReleaseDC(std::ptr::null_mut(), screen);
+    }
+}
+
+// ── Other platforms: the original WebView overlay ───────
+
+#[cfg(not(target_os = "windows"))]
+mod webview {
+    use super::{Indicator, Placement};
+    use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+
+    const ERROR_JS: &str = "(function(){var m=document.getElementById('mic');if(!m)return;\
+                            m.className='mic error';clearTimeout(window.__typrError);\
+                            window.__typrError=setTimeout(function(){\
+                            if(m.className==='mic error')m.className='mic';},2500);})();";
+
+    pub fn create(app: &AppHandle, placement: Placement) {
+        let built = WebviewWindowBuilder::new(
+            app,
+            "overlay",
+            WebviewUrl::App("src/overlay.html".into()),
+        )
+        .title("")
+        .inner_size(50.0, 50.0)
+        .position(placement.logical_x, placement.logical_y)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .shadow(false)
+        .build();
+
+        match built {
+            Ok(_) => log::info!("Overlay window created"),
+            Err(e) => log::error!("Failed to create overlay: {}", e),
+        }
+    }
+
+    fn eval(app: &AppHandle, js: &str) {
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            if let Err(e) = overlay.eval(js) {
+                log::debug!("Failed to update overlay: {}", e);
+            }
+        }
+    }
+
+    pub fn set_indicator(app: &AppHandle, indicator: Indicator) {
+        let class = match indicator {
+            Indicator::Idle => "mic",
+            Indicator::Recording => "mic recording",
+            Indicator::Transcribing => "mic transcribing",
+        };
+        eval(
+            app,
+            &format!("document.getElementById('mic').className = '{}';", class),
+        );
+    }
+
+    pub fn flash_error(app: &AppHandle) {
+        eval(app, ERROR_JS);
+    }
+
+    pub fn set_visible(app: &AppHandle, visible: bool) {
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            let _ = if visible { overlay.show() } else { overlay.hide() };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_has_transparent_corners_and_opaque_disc() {
+        let frame = render(Look::Idle, 0.0, 50, 1.0);
+        assert_eq!(frame.len(), 50 * 50 * 4);
+        assert_eq!(frame[3], 0);
+        let inside = (25 * 50 + 10) * 4;
+        assert!(frame[inside + 3] > 200);
+    }
+
+    #[test]
+    fn test_mic_sdf_inside_and_outside() {
+        assert!(mic_sdf(12.0, 8.0) < 0.0);
+        assert!(mic_sdf(2.0, 2.0) > 0.0);
+    }
+
+    #[test]
+    fn test_placement_for_monitor() {
+        let placement = Placement::for_monitor(0, 0, 3840, 2.0);
+        assert_eq!(placement.size, 100);
+        assert_eq!(placement.x, 3840 - 120);
+        assert_eq!(placement.y, 20);
+    }
+}

@@ -23,6 +23,7 @@ typr/
 │       ├── transcribe_polza.rs # Polza.AI client (JSON body, base64 data URL)
 │       ├── net.rs              # Shared HTTP client (timeouts) + response/error helpers
 │       ├── logger.rs           # `log` backend feeding the Developer section
+│       ├── overlay.rs          # Recording indicator: native layered window on Windows
 │       ├── cleanup.rs          # Post-processing: trims filler words, fixes punctuation
 │       ├── paste.rs            # Simulates Ctrl+V to paste text into active window
 │       └── settings.rs         # Settings struct, load/save from config.json
@@ -68,6 +69,11 @@ Strips common transcription artifacts (leading/trailing filler, repeated punctua
 Installed as the global `log` backend in `main()`. Use `log::info!` / `log::warn!` / `log::error!` / `log::debug!` everywhere in Rust (not `println!`). While `developerMode` is on, entries go to a 5000-entry ring buffer and are streamed to the main window as `log-entry` events; the frontend forwards its own console output via the `frontend_log` command. Never log API keys — use `Settings::summary()` / `describe_changes()`, which mask them.
 
 `stop_and_transcribe` must always return the recorder to `Ready`, even on errors; failures are reported to the UI with `recorder::notify_error` (`recording-error` event).
+
+### Memory: no WebView while idle
+- `overlay.rs` draws the recording indicator itself on Windows (`windows-sys` layered window, per-pixel alpha, SDF rendering) — no WebView. Other platforms fall back to the WebView overlay `src/overlay.html`.
+- Closing the main window destroys it (and its WebView); `show_main_window` re-creates it from `tauri.conf.json` on a separate thread (building windows in event handlers deadlocks on Windows). `RunEvent::ExitRequested` without a code is prevented, so Typr keeps running in the tray; tray → Exit calls `app.exit(0)`.
+- The tray menu's "Hotkey: On/Off" item unregisters the global shortcut, cancels an unfinished recording and hides the overlay (e.g. while gaming). The state is not persisted.
 
 ---
 

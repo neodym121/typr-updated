@@ -6,6 +6,7 @@ pub mod transcribe_groq;
 pub mod transcribe_openai;
 pub mod transcribe_polza;
 pub mod cleanup;
+pub mod overlay;
 pub mod paste;
 pub mod recorder;
 

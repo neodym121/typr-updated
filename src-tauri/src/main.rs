@@ -2,16 +2,17 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Manager, State, WebviewUrl, WebviewWindowBuilder,
+    Emitter, Manager, State, WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use typr_lib::audio;
 use typr_lib::logger::{self, LogEntry};
+use typr_lib::overlay::{self, Placement};
 use typr_lib::recorder::{self, Recorder, RecordingState};
 use typr_lib::settings::Settings;
 
@@ -21,6 +22,20 @@ struct AppState {
     app_dir: PathBuf,
     /// Whether the push-to-talk hotkey is physically held down right now
     ptt_held: AtomicBool,
+    /// Global hotkey listening; switched off from the tray (e.g. while gaming)
+    hotkey_enabled: AtomicBool,
+}
+
+/// Set while the main window is being re-created, so two quick tray clicks
+/// don't try to build it twice
+static OPENING_MAIN_WINDOW: AtomicBool = AtomicBool::new(false);
+
+fn hotkey_menu_text(enabled: bool) -> &'static str {
+    if enabled {
+        "Hotkey: On"
+    } else {
+        "Hotkey: Off"
+    }
 }
 
 fn get_app_dir() -> PathBuf {
@@ -40,13 +55,74 @@ fn log_environment(app_dir: &PathBuf, settings: &Settings) {
     log::info!("Settings: {}", settings.summary());
 }
 
+/// Focuses the main window, re-creating it if it was closed. Closing destroys
+/// the window together with its WebView, so Typr idles in the tray without a
+/// browser process.
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        return;
+    }
+
+    if OPENING_MAIN_WINDOW.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    // Building a window inside an event handler deadlocks on Windows, so use a thread
+    std::thread::spawn(move || {
+        let config = app
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|window| window.label == "main")
+            .cloned();
+        match config {
+            Some(config) => {
+                log::info!("Opening the main window");
+                let built = WebviewWindowBuilder::from_config(&app, &config)
+                    .and_then(|builder| builder.build());
+                match built {
+                    Ok(window) => {
+                        let _ = window.set_focus();
+                    }
+                    Err(e) => log::error!("Failed to open the main window: {}", e),
+                }
+            }
+            None => log::error!("Main window is missing from tauri.conf.json"),
+        }
+        OPENING_MAIN_WINDOW.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Turns global hotkey listening on or off (tray menu).
+fn set_hotkey_enabled(app: &tauri::AppHandle, enabled: bool) {
+    let state = app.state::<AppState>();
+    state.hotkey_enabled.store(enabled, Ordering::SeqCst);
+
+    if enabled {
+        let hotkey = state.settings.lock().unwrap().hotkey.clone();
+        if let Err(e) = register_hotkey(app, &hotkey) {
+            log::error!("Failed to turn the hotkey back on: {}", e);
+        } else {
+            log::info!("Hotkey turned on from the tray");
+        }
     } else {
-        log::warn!("Main window not found");
+        if let Err(e) = app.global_shortcut().unregister_all() {
+            log::warn!("Failed to unregister shortcuts: {}", e);
+        }
+        state.ptt_held.store(false, Ordering::SeqCst);
+        // Never paste into whatever is focused now (e.g. a game)
+        state.recorder.cancel_recording(app);
+        log::info!("Hotkey turned off from the tray, shortcuts are ignored until it is back on");
+    }
+
+    // Nothing on top of games while the hotkey is off
+    overlay::set_visible(app, enabled);
+    if let Err(e) = app.emit("hotkey-enabled", enabled) {
+        log::debug!("Failed to emit hotkey-enabled: {}", e);
     }
 }
 
@@ -62,7 +138,8 @@ fn save_settings(
     settings: Settings,
 ) -> Result<(), String> {
     let old = state.settings.lock().unwrap().clone();
-    if settings.hotkey != old.hotkey {
+    // While the hotkey is off (tray), the new one is registered when it's turned back on
+    if settings.hotkey != old.hotkey && state.hotkey_enabled.load(Ordering::SeqCst) {
         if let Err(e) = register_hotkey(&app, &settings.hotkey) {
             log::error!("Failed to register new hotkey '{}': {}", settings.hotkey, e);
             let _ = register_hotkey(&app, &old.hotkey);
@@ -116,6 +193,11 @@ async fn toggle_recording(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     do_toggle_recording(&app, &state).await
+}
+
+#[tauri::command]
+fn get_hotkey_enabled(state: State<AppState>) -> bool {
+    state.hotkey_enabled.load(Ordering::SeqCst)
 }
 
 #[tauri::command]
@@ -303,7 +385,7 @@ fn main() {
     let startup_settings = settings.clone();
     let startup_dir = app_dir.clone();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // Must be the first plugin, so a second launch is intercepted early
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             log::info!("Second instance launched, focusing the existing window");
@@ -315,6 +397,7 @@ fn main() {
             settings: Mutex::new(settings),
             app_dir,
             ptt_held: AtomicBool::new(false),
+            hotkey_enabled: AtomicBool::new(true),
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -322,18 +405,15 @@ fn main() {
             list_microphones,
             get_recording_state,
             toggle_recording,
+            get_hotkey_enabled,
             get_logs,
             clear_logs,
             frontend_log,
         ])
         .on_window_event(|window, event| {
-            // Closing the main window hides it to the tray; otherwise it would be
-            // destroyed and the tray icon / second launch could not bring it back.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    log::info!("Main window hidden to the tray");
+            if window.label() == "main" {
+                if let tauri::WindowEvent::Destroyed = event {
+                    log::info!("Main window closed and its WebView released, Typr keeps running in the tray");
                 }
             }
         })
@@ -341,9 +421,19 @@ fn main() {
             logger::attach_app(app.handle().clone());
             log_environment(&startup_dir, &startup_settings);
 
-            // Setup System Tray with Logo and Exit menu item
+            // System tray: hotkey on/off switch and Exit
+            let hotkey_item = Arc::new(CheckMenuItem::with_id(
+                app,
+                "toggle-hotkey",
+                hotkey_menu_text(true),
+                true,
+                true,
+                None::<&str>,
+            )?);
+            let separator = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(app, "exit", "Exit", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&quit_i])?;
+            let tray_menu = Menu::with_items(app, &[&*hotkey_item, &separator, &quit_i])?;
+            let menu_hotkey_item = hotkey_item.clone();
 
             let tray_icon = match app.default_window_icon() {
                 Some(i) => i.clone(),
@@ -363,46 +453,32 @@ fn main() {
                         }
                     }
                 })
-                .on_menu_event(|app, event| {
-                    if event.id.as_ref() == "exit" {
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "exit" => {
                         log::info!("Tray Exit clicked, terminating application");
                         app.exit(0);
                     }
+                    "toggle-hotkey" => {
+                        let enabled = !app.state::<AppState>().hotkey_enabled.load(Ordering::SeqCst);
+                        set_hotkey_enabled(app, enabled);
+                        let _ = menu_hotkey_item.set_checked(enabled);
+                        let _ = menu_hotkey_item.set_text(hotkey_menu_text(enabled));
+                    }
+                    _ => {}
                 })
                 .build(app)?;
 
-            // Create the overlay window (small mic icon, top-right, always on top)
-            let monitor = app.primary_monitor().ok().flatten();
-            let (x, y) = if let Some(m) = monitor {
-                let size = m.size();
-                let scale = m.scale_factor();
-                let logical_w = size.width as f64 / scale;
-                ((logical_w - 60.0) as i32, 10_i32)
-            } else {
-                (1380, 10)
+            // Recording indicator (small mic, top-right, always on top)
+            let placement = match app.primary_monitor().ok().flatten() {
+                Some(monitor) => Placement::for_monitor(
+                    monitor.position().x,
+                    monitor.position().y,
+                    monitor.size().width,
+                    monitor.scale_factor(),
+                ),
+                None => Placement::fallback(),
             };
-
-            let overlay = WebviewWindowBuilder::new(
-                app,
-                "overlay",
-                WebviewUrl::App("src/overlay.html".into()),
-            )
-            .title("")
-            .inner_size(50.0, 50.0)
-            .position(x as f64, y as f64)
-            .resizable(false)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .focused(false)
-            .shadow(false)
-            .build();
-
-            match overlay {
-                Ok(_) => log::info!("Overlay window created at ({}, {})", x, y),
-                Err(e) => log::error!("Failed to create overlay: {}", e),
-            }
+            overlay::create(app.handle(), placement);
 
             if let Err(e) = register_hotkey(app.handle(), &initial_hotkey) {
                 log::error!("Failed to register initial global shortcut: {}", e);
@@ -410,6 +486,16 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app, event| {
+        // Closing the main window leaves no windows open; Typr keeps running
+        // in the tray. Only an explicit exit (tray → Exit) carries a code.
+        if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+            if code.is_none() {
+                api.prevent_exit();
+            }
+        }
+    });
 }
