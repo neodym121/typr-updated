@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -14,6 +15,7 @@ interface Settings {
   polzaProvider: string;
   recordingMode: string;
   hotkey: string;
+  developerMode: boolean;
 }
 
 interface MicDevice {
@@ -21,9 +23,75 @@ interface MicDevice {
   is_default: boolean;
 }
 
+type LogLevel = "error" | "warn" | "info" | "debug";
+
+interface LogEntry {
+  id: number;
+  ts: number;
+  level: LogLevel;
+  source: string;
+  message: string;
+}
+
+// ── Frontend logging ─────────────────────────────────
+// While developer mode is on, everything the UI logs (console output and
+// uncaught errors included) is forwarded to the backend log.
+
+let developerMode = false;
+
+const nativeConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: console.debug.bind(console),
+};
+
+function stringify(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.stack || `${value.name}: ${value.message}`;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function uiLog(level: LogLevel, ...parts: unknown[]) {
+  if (!developerMode) return;
+  const message = parts.map(stringify).join(" ");
+  invoke("frontend_log", { level, message }).catch((err) =>
+    nativeConsole.error("Failed to forward log entry:", err),
+  );
+}
+
+const consoleLevels = {
+  log: "info",
+  info: "info",
+  warn: "warn",
+  error: "error",
+  debug: "debug",
+} as const;
+
+for (const method of Object.keys(consoleLevels) as (keyof typeof consoleLevels)[]) {
+  console[method] = (...args: unknown[]) => {
+    nativeConsole[method](...args);
+    uiLog(consoleLevels[method], ...args);
+  };
+}
+
+window.addEventListener("error", (event) => {
+  uiLog("error", `Uncaught error: ${event.message} (${event.filename}:${event.lineno}:${event.colno})`);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  uiLog("error", "Unhandled promise rejection:", event.reason);
+});
+
 // DOM elements
-const statusDot = document.getElementById("status-dot")!;
+const statusIndicator = document.getElementById("status-indicator")!;
 const statusText = document.getElementById("status-text")!;
+const statusDetail = document.getElementById("status-detail")!;
 const micSelect = document.getElementById("mic-select") as HTMLSelectElement;
 const engineGroq = document.getElementById("engine-groq")!;
 const engineOpenai = document.getElementById("engine-openai")!;
@@ -43,19 +111,40 @@ const modePtt = document.getElementById("mode-ptt")!;
 const hotkeyBtn = document.getElementById("hotkey-btn")!;
 const hotkeyText = document.getElementById("hotkey-text")!;
 const hotkeyHint = document.getElementById("hotkey-hint")!;
+const devModeToggle = document.getElementById("dev-mode-toggle") as HTMLInputElement;
+const navDeveloper = document.getElementById("nav-developer")!;
+const devBadge = document.getElementById("dev-badge")!;
+const versionText = document.getElementById("version-text")!;
+const logList = document.getElementById("log-list")!;
+const logEmpty = document.getElementById("log-empty")!;
+const logEmptyTitle = document.getElementById("log-empty-title")!;
+const logEmptyHint = document.getElementById("log-empty-hint")!;
+const logJump = document.getElementById("log-jump")!;
+const logSearch = document.getElementById("log-search") as HTMLInputElement;
+const logCopy = document.getElementById("log-copy")!;
+const logClear = document.getElementById("log-clear")!;
+const logLevelButtons = document.querySelectorAll<HTMLButtonElement>("#log-levels .segment");
+
+if (/Macintosh|Mac OS X/.test(navigator.userAgent)) {
+  document.body.classList.add("platform-mac");
+}
 
 // Section navigation
-const navItems = document.querySelectorAll(".nav-item");
-const sections = document.querySelectorAll(".content-section");
+const navItems = document.querySelectorAll<HTMLElement>(".nav-item");
+const sections = document.querySelectorAll<HTMLElement>(".content-section");
+
+function showSection(name: string) {
+  navItems.forEach((n) => n.classList.toggle("active", n.dataset.section === name));
+  sections.forEach((s) => s.classList.toggle("active", s.id === `section-${name}`));
+  if (name === "developer") {
+    unseenErrors = 0;
+    updateDevBadge();
+    scrollLogsToBottom();
+  }
+}
 
 navItems.forEach((item) => {
-  item.addEventListener("click", () => {
-    const target = item.getAttribute("data-section");
-    navItems.forEach((n) => n.classList.remove("active"));
-    sections.forEach((s) => s.classList.remove("active"));
-    item.classList.add("active");
-    document.getElementById(`section-${target}`)?.classList.add("active");
-  });
+  item.addEventListener("click", () => showSection(item.dataset.section || "general"));
 });
 
 // Window drag — titlebar and sidebar empty space
@@ -69,7 +158,7 @@ titlebar.addEventListener("mousedown", (e) => {
 });
 
 sidebar.addEventListener("mousedown", (e) => {
-  if ((e.target as HTMLElement).closest("button, select, input, a, .nav-item")) return;
+  if ((e.target as HTMLElement).closest("button, select, input, a, label, .nav-item, #status-detail")) return;
   appWindow.startDragging();
 });
 
@@ -96,17 +185,25 @@ function displayHotkey(hotkeyStr: string) {
 
 async function loadSettings() {
   currentSettings = await invoke<Settings>("get_settings");
+  applyDeveloperMode(Boolean(currentSettings.developerMode));
+  if (developerMode) {
+    await loadLogs();
+  }
 
-  // Populate mic dropdown
+  // Populate mic dropdown: the system default first, then every input device
   const mics = await invoke<MicDevice[]>("list_microphones");
   micSelect.innerHTML = "";
-  mics.forEach((mic) => {
-    const option = document.createElement("option");
-    option.value = mic.name;
-    option.textContent = mic.name + (mic.is_default ? " (default)" : "");
-    micSelect.appendChild(option);
-  });
-  micSelect.value = currentSettings.microphone;
+  const systemDefault = mics.find((mic) => mic.is_default);
+  micSelect.appendChild(
+    new Option(systemDefault ? `System default (${systemDefault.name})` : "System default", "default"),
+  );
+  mics.forEach((mic) => micSelect.appendChild(new Option(mic.name, mic.name)));
+  const savedMic = currentSettings.microphone || "default";
+  if (savedMic !== "default" && !mics.some((mic) => mic.name === savedMic)) {
+    micSelect.appendChild(new Option(`${savedMic} (not connected)`, savedMic));
+    uiLog("warn", `Saved microphone "${savedMic}" is not connected, the system default will be used`);
+  }
+  micSelect.value = savedMic;
 
   // Engine
   setEngine(currentSettings.engine || "groq");
@@ -129,6 +226,8 @@ async function loadSettings() {
 
   // Hotkey
   displayHotkey(currentSettings.hotkey);
+
+  uiLog("debug", `Settings loaded, ${mics.length} microphone(s) available`);
 }
 
 function setEngine(engine: string) {
@@ -156,45 +255,334 @@ async function saveSettings() {
   currentSettings.polzaApiKey = polzaKey.value.trim();
   currentSettings.polzaModel = polzaModel.value.trim();
   currentSettings.polzaProvider = polzaProvider.value.trim();
-  await invoke("save_settings", { settings: currentSettings });
+  currentSettings.developerMode = devModeToggle.checked;
+  try {
+    await invoke("save_settings", { settings: currentSettings });
+  } catch (err) {
+    uiLog("error", "Failed to save settings:", err);
+    throw err;
+  }
+}
+
+function saveQuietly() {
+  saveSettings().catch(() => {
+    // already logged in saveSettings
+  });
 }
 
 // Event listeners for settings
 engineGroq.addEventListener("click", () => {
   setEngine("groq");
-  saveSettings();
+  saveQuietly();
 });
 
 engineOpenai.addEventListener("click", () => {
   setEngine("openai");
-  saveSettings();
+  saveQuietly();
 });
 
 enginePolza.addEventListener("click", () => {
   setEngine("polza");
-  saveSettings();
+  saveQuietly();
 });
 
-micSelect.addEventListener("change", () => saveSettings());
-groqKey.addEventListener("change", () => saveSettings());
-openaiEndpoint.addEventListener("change", () => saveSettings());
-openaiModel.addEventListener("change", () => saveSettings());
-openaiKey.addEventListener("change", () => saveSettings());
-polzaKey.addEventListener("change", () => saveSettings());
-polzaModel.addEventListener("change", () => saveSettings());
-polzaProvider.addEventListener("change", () => saveSettings());
+micSelect.addEventListener("change", () => saveQuietly());
+groqKey.addEventListener("change", () => saveQuietly());
+openaiEndpoint.addEventListener("change", () => saveQuietly());
+openaiModel.addEventListener("change", () => saveQuietly());
+openaiKey.addEventListener("change", () => saveQuietly());
+polzaKey.addEventListener("change", () => saveQuietly());
+polzaModel.addEventListener("change", () => saveQuietly());
+polzaProvider.addEventListener("change", () => saveQuietly());
 
 modeToggle.addEventListener("click", () => {
   setRecordingMode("toggle");
-  saveSettings();
+  saveQuietly();
 });
 
 modePtt.addEventListener("click", () => {
   setRecordingMode("push-to-talk");
-  saveSettings();
+  saveQuietly();
 });
 
-// Hotkey Recording Logic
+// ── Developer mode ───────────────────────────────────
+
+function applyDeveloperMode(enabled: boolean) {
+  developerMode = enabled;
+  devModeToggle.checked = enabled;
+  navDeveloper.classList.toggle("hidden", !enabled);
+  if (!enabled) {
+    if (navDeveloper.classList.contains("active")) showSection("general");
+    resetLogView();
+  }
+}
+
+devModeToggle.addEventListener("change", async () => {
+  const enabled = devModeToggle.checked;
+  applyDeveloperMode(enabled);
+  try {
+    await saveSettings();
+  } catch {
+    applyDeveloperMode(!enabled);
+    return;
+  }
+  if (enabled) {
+    await loadLogs();
+  }
+});
+
+// ── Log console ──────────────────────────────────────
+
+const MAX_LOG_ENTRIES = 5000;
+let logEntries: LogEntry[] = [];
+const seenLogIds = new Set<number>();
+const levelCounts: Record<LogLevel, number> = { error: 0, warn: 0, info: 0, debug: 0 };
+let levelFilter: "all" | LogLevel = "all";
+let searchQuery = "";
+let unseenErrors = 0;
+
+function isDeveloperSectionActive(): boolean {
+  return navDeveloper.classList.contains("active");
+}
+
+function pad(value: number, width = 2): string {
+  return String(value).padStart(width, "0");
+}
+
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+function formatEntryLine(entry: LogEntry): string {
+  const d = new Date(entry.ts);
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${date} ${formatTime(entry.ts)} [${entry.level.toUpperCase()}] ${entry.source}: ${entry.message}`;
+}
+
+function matchesFilter(entry: LogEntry): boolean {
+  if (levelFilter !== "all" && entry.level !== levelFilter) return false;
+  if (!searchQuery) return true;
+  return `${entry.source} ${entry.message}`.toLowerCase().includes(searchQuery);
+}
+
+function createLogRow(entry: LogEntry): HTMLElement {
+  const row = document.createElement("div");
+  row.className = `log-row ${entry.level}`;
+  row.dataset.id = String(entry.id);
+
+  const time = document.createElement("span");
+  time.className = "log-time";
+  time.textContent = formatTime(entry.ts);
+  time.title = new Date(entry.ts).toLocaleString();
+
+  const level = document.createElement("span");
+  level.className = `log-level ${entry.level}`;
+  level.textContent = entry.level;
+
+  const source = document.createElement("span");
+  source.className = "log-source";
+  source.textContent = entry.source;
+  source.title = entry.source;
+
+  const message = document.createElement("span");
+  message.className = "log-message";
+  message.textContent = entry.message;
+
+  row.append(time, level, source, message);
+  return row;
+}
+
+function isNearBottom(): boolean {
+  return logList.scrollHeight - logList.scrollTop - logList.clientHeight < 32;
+}
+
+function scrollLogsToBottom() {
+  logList.scrollTop = logList.scrollHeight;
+  logJump.classList.add("hidden");
+}
+
+function updateLogMeta() {
+  const total = logEntries.length;
+  document.querySelectorAll<HTMLElement>("#log-levels .count").forEach((el) => {
+    const key = el.dataset.count as "all" | LogLevel;
+    const value = key === "all" ? total : levelCounts[key];
+    el.textContent = String(value);
+    el.classList.toggle("alert", key === "error" && value > 0);
+  });
+
+  const hasRows = logList.childElementCount > 0;
+  logEmpty.classList.toggle("hidden", hasRows);
+  if (!hasRows) {
+    if (total === 0) {
+      logEmptyTitle.textContent = "No logs yet";
+      logEmptyHint.textContent = "Press your hotkey and dictate something. Every step will show up here.";
+    } else {
+      logEmptyTitle.textContent = "Nothing matches";
+      logEmptyHint.textContent = "Try another level or clear the text filter.";
+    }
+  }
+}
+
+function updateDevBadge() {
+  devBadge.textContent = String(unseenErrors);
+  devBadge.classList.toggle("hidden", unseenErrors === 0);
+}
+
+function renderLogs() {
+  const fragment = document.createDocumentFragment();
+  for (const entry of logEntries) {
+    if (matchesFilter(entry)) fragment.appendChild(createLogRow(entry));
+  }
+  logList.replaceChildren(fragment);
+  updateLogMeta();
+  scrollLogsToBottom();
+}
+
+function trackEntry(entry: LogEntry) {
+  seenLogIds.add(entry.id);
+  levelCounts[entry.level] = (levelCounts[entry.level] || 0) + 1;
+}
+
+function trimLogEntries() {
+  let removedAny = false;
+  while (logEntries.length > MAX_LOG_ENTRIES) {
+    const removed = logEntries.shift()!;
+    seenLogIds.delete(removed.id);
+    levelCounts[removed.level] -= 1;
+    removedAny = true;
+  }
+  if (removedAny && logEntries.length > 0) {
+    const minId = logEntries[0].id;
+    let first = logList.firstElementChild as HTMLElement | null;
+    while (first && Number(first.dataset.id) < minId) {
+      first.remove();
+      first = logList.firstElementChild as HTMLElement | null;
+    }
+  }
+}
+
+function addLogEntry(entry: LogEntry) {
+  if (!developerMode || seenLogIds.has(entry.id)) return;
+  logEntries.push(entry);
+  trackEntry(entry);
+  trimLogEntries();
+
+  if (entry.level === "error" && !isDeveloperSectionActive()) {
+    unseenErrors += 1;
+    updateDevBadge();
+  }
+
+  if (matchesFilter(entry)) {
+    const stickToBottom = isNearBottom();
+    logList.appendChild(createLogRow(entry));
+    if (stickToBottom) {
+      logList.scrollTop = logList.scrollHeight;
+    } else {
+      logJump.classList.remove("hidden");
+    }
+  }
+  updateLogMeta();
+}
+
+function resetLogView() {
+  logEntries = [];
+  seenLogIds.clear();
+  (Object.keys(levelCounts) as LogLevel[]).forEach((level) => (levelCounts[level] = 0));
+  unseenErrors = 0;
+  updateDevBadge();
+  logList.replaceChildren();
+  updateLogMeta();
+}
+
+async function loadLogs() {
+  try {
+    const fetched = await invoke<LogEntry[]>("get_logs");
+    const lastFetchedId = fetched.length > 0 ? fetched[fetched.length - 1].id : 0;
+    // Keep entries that arrived as events while the request was in flight
+    const newer = logEntries.filter((entry) => entry.id > lastFetchedId);
+    resetLogView();
+    logEntries = [...fetched, ...newer];
+    logEntries.forEach(trackEntry);
+    trimLogEntries();
+    renderLogs();
+  } catch (err) {
+    nativeConsole.error("Failed to load logs:", err);
+  }
+}
+
+logLevelButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    levelFilter = (button.dataset.level as "all" | LogLevel) || "all";
+    logLevelButtons.forEach((b) => b.classList.toggle("active", b === button));
+    renderLogs();
+  });
+});
+
+let searchTimer: number | undefined;
+logSearch.addEventListener("input", () => {
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    searchQuery = logSearch.value.trim().toLowerCase();
+    renderLogs();
+  }, 120);
+});
+
+logList.addEventListener("scroll", () => {
+  if (isNearBottom()) logJump.classList.add("hidden");
+});
+
+logJump.addEventListener("click", () => scrollLogsToBottom());
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+}
+
+function flashButton(button: HTMLElement, text: string) {
+  const original = button.dataset.label || button.textContent || "";
+  button.dataset.label = original;
+  button.textContent = text;
+  window.setTimeout(() => {
+    button.textContent = original;
+  }, 1200);
+}
+
+logCopy.addEventListener("click", async () => {
+  const lines = logEntries.filter(matchesFilter).map(formatEntryLine);
+  if (lines.length === 0) {
+    flashButton(logCopy, "Nothing to copy");
+    return;
+  }
+  const ok = await copyText(lines.join("\n"));
+  flashButton(logCopy, ok ? `Copied ${lines.length}` : "Copy failed");
+});
+
+logClear.addEventListener("click", async () => {
+  try {
+    await invoke("clear_logs");
+  } catch (err) {
+    nativeConsole.error("Failed to clear logs:", err);
+  }
+  resetLogView();
+});
+
+listen<LogEntry>("log-entry", (event) => addLogEntry(event.payload));
+
+// ── Hotkey Recording Logic ───────────────────────────
+
 let isRecordingHotkey = false;
 
 function startHotkeyRecording() {
@@ -226,7 +614,7 @@ function startHotkeyRecording() {
     e.stopPropagation();
 
     if (e.key === "Escape" && pressedKeys.size === 0) {
-      cleanup(false);
+      cleanup();
       return;
     }
 
@@ -261,17 +649,17 @@ function startHotkeyRecording() {
         return a.localeCompare(b);
       });
 
-      const newHotkey = sorted.join("+");
-      currentSettings.hotkey = newHotkey;
+      const previousHotkey = currentSettings.hotkey;
+      currentSettings.hotkey = sorted.join("+");
 
       saveSettings()
         .then(() => {
-          cleanup(true);
+          cleanup();
         })
-        .catch((err) => {
-          console.error("Failed to save hotkey:", err);
+        .catch(() => {
+          currentSettings.hotkey = previousHotkey;
           hotkeyText.textContent = "Error saving";
-          setTimeout(() => cleanup(false), 1200);
+          setTimeout(() => cleanup(), 1200);
         });
       return;
     }
@@ -292,11 +680,11 @@ function startHotkeyRecording() {
 
   const onOutsideClick = (e: MouseEvent) => {
     if (!hotkeyBtn.contains(e.target as Node)) {
-      cleanup(false);
+      cleanup();
     }
   };
 
-  const cleanup = (_saved: boolean) => {
+  const cleanup = () => {
     isRecordingHotkey = false;
     hotkeyBtn.classList.remove("recording");
     window.removeEventListener("keydown", onKeyDown, true);
@@ -315,21 +703,52 @@ hotkeyBtn.addEventListener("click", () => {
   startHotkeyRecording();
 });
 
-// Listen for recording state changes
-listen<string>("recording-state", (event) => {
-  const state = event.payload;
-  statusDot.className = "";
+// ── Recording status ─────────────────────────────────
+
+type StatusState = "ready" | "recording" | "transcribing" | "error";
+let statusResetTimer: number | undefined;
+
+function setStatus(state: StatusState, text: string, detail = "") {
+  statusIndicator.dataset.state = state;
+  statusText.textContent = text;
+  statusDetail.textContent = detail;
+  statusDetail.classList.toggle("hidden", !detail);
+  statusIndicator.title = detail;
+}
+
+function applyRecordingState(state: string) {
   if (state === "Recording") {
-    statusDot.classList.add("recording");
-    statusText.textContent = "Recording...";
+    window.clearTimeout(statusResetTimer);
+    setStatus("recording", "Recording…");
   } else if (state === "Transcribing") {
-    statusDot.classList.add("transcribing");
-    statusText.textContent = "Transcribing...";
-  } else {
-    statusDot.classList.add("ready");
-    statusText.textContent = "Ready";
+    setStatus("transcribing", "Transcribing…");
+  } else if (statusIndicator.dataset.state !== "error") {
+    setStatus("ready", "Ready");
   }
+}
+
+listen<string>("recording-state", (event) => applyRecordingState(event.payload));
+
+listen<string>("recording-error", (event) => {
+  window.clearTimeout(statusResetTimer);
+  setStatus("error", "Error", event.payload);
+  statusResetTimer = window.setTimeout(() => setStatus("ready", "Ready"), 12000);
 });
 
 // Initialize
-loadSettings();
+getVersion()
+  .then((version) => {
+    versionText.textContent = `v${version}`;
+  })
+  .catch(() => {
+    // keep the version from the markup
+  });
+
+invoke<string>("get_recording_state")
+  .then(applyRecordingState)
+  .catch((err) => uiLog("warn", "Could not read recording state:", err));
+
+loadSettings().catch((err) => {
+  nativeConsole.error("Failed to load settings:", err);
+  uiLog("error", "Failed to load settings:", err);
+});

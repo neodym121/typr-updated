@@ -3,10 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
     <title>Typr</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -16,74 +17,99 @@
       <aside id="sidebar">
         <div class="sidebar-header">
           <div class="app-identity">
-            <svg class="app-icon" width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <rect width="18" height="18" rx="4" fill="currentColor" opacity="0.15"/>
-              <path d="M5 6.5h8M5 9h5.5M5 11.5h7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <svg class="app-mark" width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+              <rect x="0.5" y="0.5" width="21" height="21" rx="6.5" fill="currentColor" fill-opacity="0.14" stroke="currentColor" stroke-opacity="0.35"/>
+              <path d="M6.5 8h9M6.5 11h6M6.5 14h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
             <span class="app-name">Typr</span>
           </div>
-          <div id="status-indicator">
+          <div id="status-indicator" data-state="ready" role="status" aria-live="polite">
             <span id="status-dot"></span>
             <span id="status-text">Ready</span>
           </div>
+          <p id="status-detail" class="hidden"></p>
         </div>
         <nav id="sidebar-nav">
-          <a class="nav-item active" data-section="general">
-            <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <button type="button" class="nav-item active" data-section="general">
+            <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/>
               <path d="M8 5v3l2 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             General
-          </a>
-          <a class="nav-item" data-section="engine">
-            <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          </button>
+          <button type="button" class="nav-item" data-section="engine">
+            <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M2.5 8h3l1.5-3 2 6 1.5-3h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             Engine
-          </a>
-          <a class="nav-item" data-section="recording">
-            <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          </button>
+          <button type="button" class="nav-item" data-section="recording">
+            <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <rect x="6" y="2.5" width="4" height="7" rx="2" stroke="currentColor" stroke-width="1.2"/>
               <path d="M4 8.5a4 4 0 008 0M8 12.5v1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
             </svg>
             Recording
-          </a>
+          </button>
+          <button type="button" class="nav-item hidden" id="nav-developer" data-section="developer">
+            <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M4.5 6.5L6.5 8l-2 1.5M8 10h3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Developer
+            <span id="dev-badge" class="nav-badge hidden"></span>
+          </button>
         </nav>
         <div class="sidebar-footer">
-          <span class="version-text">v1.0.0</span>
+          <span class="version-text" id="version-text">v1.0.0</span>
         </div>
       </aside>
 
       <main id="content">
         <section id="section-general" class="content-section active">
-          <div class="section-header">
-            <h2 class="section-title">General</h2>
-            <p class="section-desc">Configure your audio input device</p>
-          </div>
-          <div class="settings-list">
+          <header class="section-header">
+            <h1 class="section-title">General</h1>
+            <p class="section-desc">Audio input and app preferences</p>
+          </header>
+          <div class="card">
             <div class="setting-row">
               <div class="setting-label">
                 <span class="label-text">Microphone</span>
-                <span class="label-hint">Select your preferred input device</span>
+                <span class="label-hint">Input device used for dictation</span>
               </div>
               <div class="setting-control">
                 <select id="mic-select"></select>
               </div>
             </div>
           </div>
+
+          <h2 class="group-title">Advanced</h2>
+          <div class="card">
+            <div class="setting-row">
+              <div class="setting-label">
+                <label class="label-text" for="dev-mode-toggle">Developer mode</label>
+                <span class="label-hint">Records everything the app does and shows it in the Developer section</span>
+              </div>
+              <div class="setting-control">
+                <label class="switch">
+                  <input type="checkbox" id="dev-mode-toggle" role="switch" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section id="section-engine" class="content-section">
-          <div class="section-header">
-            <h2 class="section-title">Engine</h2>
-            <p class="section-desc">Choose your cloud transcription provider</p>
+          <header class="section-header">
+            <h1 class="section-title">Engine</h1>
+            <p class="section-desc">The cloud service that turns your speech into text</p>
+          </header>
+          <div class="segmented full engine-tabs">
+            <button type="button" id="engine-groq" class="segment active">Groq Cloud</button>
+            <button type="button" id="engine-openai" class="segment">OpenAI Compatible</button>
+            <button type="button" id="engine-polza" class="segment">Polza</button>
           </div>
-          <div class="engine-tabs">
-            <button id="engine-groq" class="engine-tab active">Groq Cloud</button>
-            <button id="engine-openai" class="engine-tab">OpenAI Compatible</button>
-            <button id="engine-polza" class="engine-tab">Polza</button>
-          </div>
-          <div class="settings-list">
+          <div class="card">
             <!-- Groq Settings -->
             <div id="groq-settings">
               <div class="setting-row">
@@ -162,20 +188,20 @@
         </section>
 
         <section id="section-recording" class="content-section">
-          <div class="section-header">
-            <h2 class="section-title">Recording</h2>
-            <p class="section-desc">Configure how you trigger transcription</p>
-          </div>
-          <div class="settings-list">
+          <header class="section-header">
+            <h1 class="section-title">Recording</h1>
+            <p class="section-desc">How you start and stop a dictation</p>
+          </header>
+          <div class="card">
             <div class="setting-row">
               <div class="setting-label">
                 <span class="label-text">Recording Mode</span>
                 <span class="label-hint">Toggle starts/stops, Push to Talk records while held</span>
               </div>
               <div class="setting-control">
-                <div class="toggle-group">
-                  <button id="mode-toggle" class="toggle-btn active">Toggle</button>
-                  <button id="mode-ptt" class="toggle-btn">Push to Talk</button>
+                <div class="segmented">
+                  <button type="button" id="mode-toggle" class="segment active">Toggle</button>
+                  <button type="button" id="mode-ptt" class="segment">Push to Talk</button>
                 </div>
               </div>
             </div>
@@ -190,6 +216,35 @@
                 </button>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section id="section-developer" class="content-section section-fill">
+          <header class="section-header">
+            <h1 class="section-title">Developer</h1>
+            <p class="section-desc">Live log of everything Typr does: hotkeys, audio, requests, errors</p>
+          </header>
+          <div class="log-toolbar">
+            <div class="segmented" id="log-levels">
+              <button type="button" class="segment active" data-level="all">All <span class="count" data-count="all">0</span></button>
+              <button type="button" class="segment" data-level="error">Errors <span class="count" data-count="error">0</span></button>
+              <button type="button" class="segment" data-level="warn">Warnings <span class="count" data-count="warn">0</span></button>
+              <button type="button" class="segment" data-level="info">Info <span class="count" data-count="info">0</span></button>
+              <button type="button" class="segment" data-level="debug">Debug <span class="count" data-count="debug">0</span></button>
+            </div>
+            <input type="search" id="log-search" class="log-search" placeholder="Filter by text…" spellcheck="false" />
+            <div class="log-actions">
+              <button type="button" class="btn btn-secondary" id="log-copy">Copy</button>
+              <button type="button" class="btn btn-secondary" id="log-clear">Clear</button>
+            </div>
+          </div>
+          <div class="log-panel">
+            <div id="log-list" class="log-list" role="log"></div>
+            <div id="log-empty" class="log-empty">
+              <span class="log-empty-title" id="log-empty-title">No logs yet</span>
+              <span class="log-empty-hint" id="log-empty-hint">Press your hotkey and dictate something. Every step will show up here.</span>
+            </div>
+            <button type="button" id="log-jump" class="log-jump hidden">Jump to latest ↓</button>
           </div>
         </section>
       </main>

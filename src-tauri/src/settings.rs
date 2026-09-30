@@ -49,6 +49,9 @@ pub struct Settings {
     pub recording_mode: String,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    /// Shows the Developer section and turns on log collection
+    #[serde(rename = "developerMode", default)]
+    pub developer_mode: bool,
 }
 
 impl Default for Settings {
@@ -65,7 +68,16 @@ impl Default for Settings {
             polza_provider: String::new(),
             recording_mode: "toggle".to_string(),
             hotkey: "Ctrl+Shift+Space".to_string(),
+            developer_mode: false,
         }
+    }
+}
+
+fn key_state(key: &str) -> &'static str {
+    if key.trim().is_empty() {
+        "not set"
+    } else {
+        "set"
     }
 }
 
@@ -93,6 +105,67 @@ impl Settings {
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         fs::write(&path, json).map_err(|e| e.to_string())
     }
+
+    /// One-line description for logs. API keys are never included,
+    /// only whether they are set.
+    pub fn summary(&self) -> String {
+        format!(
+            "engine={}, mode={}, hotkey={}, mic='{}', groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, developerMode={}",
+            self.engine,
+            self.recording_mode,
+            self.hotkey,
+            self.microphone,
+            key_state(&self.groq_api_key),
+            self.openai_endpoint,
+            self.openai_model,
+            key_state(&self.openai_api_key),
+            self.polza_model,
+            if self.polza_provider.is_empty() { "auto" } else { self.polza_provider.as_str() },
+            key_state(&self.polza_api_key),
+            self.developer_mode
+        )
+    }
+
+    /// Human-readable list of what differs from `old`, with API keys masked.
+    pub fn describe_changes(&self, old: &Settings) -> Vec<String> {
+        let mut changes = Vec::new();
+
+        let plain = [
+            ("engine", &old.engine, &self.engine),
+            ("microphone", &old.microphone, &self.microphone),
+            ("recordingMode", &old.recording_mode, &self.recording_mode),
+            ("hotkey", &old.hotkey, &self.hotkey),
+            ("openaiEndpoint", &old.openai_endpoint, &self.openai_endpoint),
+            ("openaiModel", &old.openai_model, &self.openai_model),
+            ("polzaModel", &old.polza_model, &self.polza_model),
+            ("polzaProvider", &old.polza_provider, &self.polza_provider),
+        ];
+        for (name, before, after) in plain {
+            if before != after {
+                changes.push(format!("{}: '{}' → '{}'", name, before, after));
+            }
+        }
+
+        let secret = [
+            ("groqApiKey", &old.groq_api_key, &self.groq_api_key),
+            ("openaiApiKey", &old.openai_api_key, &self.openai_api_key),
+            ("polzaApiKey", &old.polza_api_key, &self.polza_api_key),
+        ];
+        for (name, before, after) in secret {
+            if before != after {
+                changes.push(format!("{} updated ({})", name, key_state(after)));
+            }
+        }
+
+        if old.developer_mode != self.developer_mode {
+            changes.push(format!(
+                "developerMode: {} → {}",
+                old.developer_mode, self.developer_mode
+            ));
+        }
+
+        changes
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +187,29 @@ mod tests {
         assert_eq!(settings.polza_provider, "");
         assert_eq!(settings.recording_mode, "toggle");
         assert_eq!(settings.hotkey, "Ctrl+Shift+Space");
+        assert!(!settings.developer_mode);
+    }
+
+    #[test]
+    fn test_logs_never_contain_api_keys() {
+        let old = Settings::default();
+        let mut new = Settings::default();
+        new.groq_api_key = "gsk_secret".to_string();
+        new.engine = "polza".to_string();
+
+        let summary = new.summary();
+        let changes = new.describe_changes(&old).join("; ");
+        assert!(!summary.contains("gsk_secret"));
+        assert!(!changes.contains("gsk_secret"));
+        assert!(changes.contains("engine: 'groq' → 'polza'"));
+        assert!(changes.contains("groqApiKey updated (set)"));
+    }
+
+    #[test]
+    fn test_missing_developer_mode_defaults_to_false() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"microphone":"default","engine":"groq"}"#).unwrap();
+        assert!(!settings.developer_mode);
     }
 
     #[test]

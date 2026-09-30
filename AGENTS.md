@@ -20,6 +20,9 @@ typr/
 │       ├── audio.rs            # Low-level audio capture (cpal)
 │       ├── transcribe_groq.rs  # Groq Whisper API client
 │       ├── transcribe_openai.rs# OpenAI / OpenAI-compatible API client
+│       ├── transcribe_polza.rs # Polza.AI client (JSON body, base64 data URL)
+│       ├── net.rs              # Shared HTTP client (timeouts) + response/error helpers
+│       ├── logger.rs           # `log` backend feeding the Developer section
 │       ├── cleanup.rs          # Post-processing: trims filler words, fixes punctuation
 │       ├── paste.rs            # Simulates Ctrl+V to paste text into active window
 │       └── settings.rs         # Settings struct, load/save from config.json
@@ -46,8 +49,9 @@ Manages the `RecordingState` state machine (`Ready → Recording → Transcribin
 
 ### `settings.rs` — Configuration
 Persisted to `config.json` in the Tauri app data directory. Key fields:
-- `engine`: `"groq"` | `"openai"` | `"openai-compatible"` (default: `"groq"`)
-- `groqApiKey`, `openaiApiKey`, `openaiEndpoint`, `openaiModel`
+- `engine`: `"groq"` | `"openai"` | `"openai-compatible"` | `"polza"` (default: `"groq"`)
+- `groqApiKey`, `openaiApiKey`, `openaiEndpoint`, `openaiModel`, `polzaApiKey`, `polzaModel`, `polzaProvider`
+- `developerMode`: shows the Developer section and turns log collection on
 - `microphone`: device name or `"default"`
 - `recordingMode`: `"toggle"` | `"push-to-talk"`
 - `hotkey`: default `"Ctrl+Shift+Space"`
@@ -59,6 +63,11 @@ Both send a multipart form POST with the WAV file to the respective API. `transc
 
 ### `cleanup.rs`
 Strips common transcription artifacts (leading/trailing filler, repeated punctuation, etc.) before the text is pasted.
+
+### `logger.rs` — Developer section
+Installed as the global `log` backend in `main()`. Use `log::info!` / `log::warn!` / `log::error!` / `log::debug!` everywhere in Rust (not `println!`). While `developerMode` is on, entries go to a 5000-entry ring buffer and are streamed to the main window as `log-entry` events; the frontend forwards its own console output via the `frontend_log` command. Never log API keys — use `Settings::summary()` / `describe_changes()`, which mask them.
+
+`stop_and_transcribe` must always return the recorder to `Ready`, even on errors; failures are reported to the UI with `recorder::notify_error` (`recording-error` event).
 
 ---
 

@@ -1,4 +1,6 @@
 pub mod settings;
+pub mod logger;
+pub mod net;
 pub mod audio;
 pub mod transcribe_groq;
 pub mod transcribe_openai;
