@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="c.svg" width="96" height="96" alt="Typr logo" />
+  <img src="assets/logo.svg" width="96" height="96" alt="Typr logo" />
 </p>
 
 <h1 align="center">Typr</h1>
@@ -9,6 +9,10 @@
 </p>
 
 Typr is a lightweight desktop dictation app for Windows. Press a global hotkey, speak, and the recognized text is pasted into whatever window is active.
+
+<p align="center">
+  <img src="assets/screenshot.png" width="720" alt="Typr settings window" />
+</p>
 
 ## Features
 

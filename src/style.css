@@ -1,21 +1,20 @@
 /*
- * Typr — dark theme of the warm-monochrome system described in /дизайн.
- * Warm neutrals for every surface and text level, Clay (#d97757) only as a
- * small accent mark, serif for headlines, sans for everything else,
- * flat surfaces with hairline borders.
+ * Typr — dark theme. Warm neutrals for every surface and text level, one
+ * terracotta accent (#d97757) only as a small mark, serif for headlines,
+ * sans for everything else, flat surfaces with hairline borders.
  */
 
 :root {
   color-scheme: dark;
 
-  /* Base palette (дизайн/variables.css) */
-  --color-bone-parchment: #f8f8f6;
-  --color-carbon-ink:     #121212;
-  --color-pebble:         #9c9a92;
-  --color-ashen:          #7b7974;
-  --color-clay:           #d97757;
+  /* Base palette */
+  --color-light:     #f8f8f6;
+  --color-ink:       #121212;
+  --color-gray:      #9c9a92;
+  --color-gray-dark: #7b7974;
+  --color-accent:    #d97757;
 
-  /* Surfaces — the light system's parchment → paper → vellum, inverted */
+  /* Surfaces */
   --surface-sidebar: #1f1e1d;
   --surface-canvas:  #262624;
   --surface-card:    #30302e;
@@ -25,11 +24,11 @@
   --surface-active:  rgba(248, 248, 246, 0.08);
 
   /* Text */
-  --text-primary:   var(--color-bone-parchment);
+  --text-primary:   var(--color-light);
   --text-secondary: #c2c0b6;
-  --text-muted:     var(--color-pebble);
-  --text-faint:     var(--color-ashen);
-  --text-on-light:  var(--color-carbon-ink);
+  --text-muted:     var(--color-gray);
+  --text-faint:     var(--color-gray-dark);
+  --text-on-light:  var(--color-ink);
 
   /* Hairlines */
   --border:        rgba(248, 248, 246, 0.08);
@@ -38,14 +37,14 @@
   --border-focus:  rgba(248, 248, 246, 0.40);
   --focus-halo:    0 0 0 3px rgba(248, 248, 246, 0.10);
 
-  /* Clay — decorative accent only, never a button fill */
-  --clay:       var(--color-clay);
-  --clay-soft:  rgba(217, 119, 87, 0.16);
-  --clay-light: #e8a88f;
+  /* Accent — decorative only, never a button fill */
+  --accent:       var(--color-accent);
+  --accent-soft:  rgba(217, 119, 87, 0.16);
+  --accent-light: #e8a88f;
 
   /* Typography */
-  --font-serif: 'Source Serif 4', 'Anthropic Serif', Charter, 'Bitstream Charter', Georgia, serif;
-  --font-sans:  'Inter', 'Anthropic Sans', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Source Serif 4', Charter, 'Bitstream Charter', Georgia, serif;
+  --font-sans:  'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-mono:  'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', Consolas, ui-monospace, monospace;
   --font-log:   'Microsoft Sans Serif', 'MS Sans Serif', Tahoma, sans-serif;
 
@@ -193,8 +192,8 @@ button {
 }
 
 #status-indicator[data-state="recording"] #status-dot {
-  background: var(--clay);
-  box-shadow: 0 0 0 4px var(--clay-soft);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
   animation: breathe 1.2s ease-in-out infinite;
 }
 
@@ -215,11 +214,11 @@ button {
 
 #status-indicator[data-state="error"] #status-dot {
   background: transparent;
-  box-shadow: inset 0 0 0 2px var(--clay);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 #status-indicator[data-state="error"] #status-text {
-  color: var(--clay-light);
+  color: var(--accent-light);
 }
 
 /* Hotkey switched off from the tray */
@@ -301,8 +300,8 @@ button {
   height: 18px;
   padding: 0 5px;
   border-radius: var(--radius-pill);
-  background: var(--clay-soft);
-  color: var(--clay-light);
+  background: var(--accent-soft);
+  color: var(--accent-light);
   font-size: var(--text-caption);
   font-weight: 580;
   line-height: 18px;
@@ -795,13 +794,13 @@ kbd {
 
 .hotkey-record-btn.recording kbd {
   color: var(--text-primary);
-  border-color: var(--clay);
-  box-shadow: 0 0 0 3px var(--clay-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
   animation: listening 1.4s ease-in-out infinite;
 }
 
 @keyframes listening {
-  0%, 100% { box-shadow: 0 0 0 3px var(--clay-soft); }
+  0%, 100% { box-shadow: 0 0 0 3px var(--accent-soft); }
   50% { box-shadow: 0 0 0 5px rgba(217, 119, 87, 0.06); }
 }
 
@@ -832,7 +831,7 @@ kbd {
 }
 
 .count.alert {
-  color: var(--clay);
+  color: var(--accent);
 }
 
 .log-search {
@@ -886,7 +885,7 @@ input.log-search {
 
 .log-row.error {
   background: rgba(217, 119, 87, 0.10);
-  box-shadow: inset 2px 0 0 var(--clay);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .log-time {
@@ -901,8 +900,8 @@ input.log-search {
   text-transform: uppercase;
 }
 
-.log-level.error { color: var(--clay); }
-.log-level.warn  { color: var(--clay-light); }
+.log-level.error { color: var(--accent); }
+.log-level.warn  { color: var(--accent-light); }
 .log-level.info  { color: var(--text-secondary); }
 .log-level.debug { color: var(--text-faint); }
 

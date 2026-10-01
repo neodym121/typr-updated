@@ -99,7 +99,7 @@ pub fn set_indicator(app: &AppHandle, indicator: Indicator) {
     webview::set_indicator(app, indicator);
 }
 
-/// Briefly shows the error look (a Clay ring) after a failed dictation.
+/// Briefly shows the error look (an accent ring) after a failed dictation.
 pub fn flash_error(app: &AppHandle) {
     #[cfg(target_os = "windows")]
     {
@@ -162,26 +162,26 @@ fn render(look: Look, t: f32, width: usize, height: usize, center_y: f32, scale:
     let reach = radius + 8.0 * s;
 
     let dark = paint(31, 30, 29, 0.94);
-    let clay = paint(217, 119, 87, 1.0);
-    let bone = paint(248, 248, 246, 1.0);
-    let pebble = paint(156, 154, 146, 1.0);
+    let accent = paint(217, 119, 87, 1.0);
+    let light = paint(248, 248, 246, 1.0);
+    let muted = paint(156, 154, 146, 1.0);
 
     // fill, border, icon, optional halo (paint, extra radius in logical px)
     let (fill, border, icon, halo) = match look {
-        Look::Idle => (dark, paint(248, 248, 246, 0.14), pebble, None),
+        Look::Idle => (dark, paint(248, 248, 246, 0.14), muted, None),
         Look::Recording => {
             // Ring that grows and fades, then comes back (1.4 s cycle)
             let phase = (t / 1.4).fract();
             let wave = if phase < 0.5 { phase * 2.0 } else { (1.0 - phase) * 2.0 };
             (
-                clay,
+                accent,
                 paint(248, 248, 246, 0.22),
-                bone,
+                light,
                 Some((paint(217, 119, 87, 0.5 * (1.0 - wave)), 4.0 * wave)),
             )
         }
-        Look::Transcribing => (dark, paint(248, 248, 246, 0.2), bone, None),
-        Look::Error => (dark, clay, clay, Some((paint(217, 119, 87, 0.35), 3.0))),
+        Look::Transcribing => (dark, paint(248, 248, 246, 0.2), light, None),
+        Look::Error => (dark, accent, accent, Some((paint(217, 119, 87, 0.35), 3.0))),
     };
     let spinner_head = t * TAU / 0.9;
 
@@ -218,7 +218,7 @@ fn render(look: Look, t: f32, width: usize, height: usize, center_y: f32, scale:
                 let angle = dx.atan2(-dy);
                 let offset = wrap_angle(angle - spinner_head);
                 let sector = (offset.abs() - FRAC_PI_4) * dist;
-                over(&mut pixel, bone.rgb, coverage(ring.max(sector)));
+                over(&mut pixel, light.rgb, coverage(ring.max(sector)));
             }
 
             // Microphone glyph: 24-unit icon drawn 18 logical px wide, centred

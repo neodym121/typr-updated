@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="c.svg" width="96" height="96" alt="Логотип Typr" />
+  <img src="assets/logo.svg" width="96" height="96" alt="Логотип Typr" />
 </p>
 
 <h1 align="center">Typr</h1>
@@ -9,6 +9,10 @@
 </p>
 
 Typr — лёгкое приложение для голосового ввода на Windows. Нажимаешь глобальный хоткей, говоришь, и распознанный текст вставляется в активное окно.
+
+<p align="center">
+  <img src="assets/screenshot.png" width="720" alt="Окно настроек Typr" />
+</p>
 
 ## Возможности
 
