@@ -25,3 +25,6 @@ dist-ssr
 
 # Rust
 target/
+
+# Installers downloaded from the GitHub Actions artifact
+typr-windows/
