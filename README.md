@@ -23,10 +23,6 @@ Typr is a lightweight desktop dictation app for Windows. Press a global hotkey, 
 - **English and Russian interface:** follows the system language (Russian for Russian, Ukrainian, Belarusian and other CIS languages, English otherwise) and can be switched in **General**
 - Dark, minimal interface
 
-## Installation
-
-Download the Windows installer (`.msi` or `.exe`) from the `typr-windows` artifact of the latest successful run in the [Actions](../../actions) tab, then add your API key in **Engine**.
-
 ## Building
 
 The installer is built by GitHub Actions (`.github/workflows/build.yml`) when a `v*` tag is pushed or the workflow is started manually:
