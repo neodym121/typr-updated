@@ -15,6 +15,7 @@ interface Settings {
   polzaProvider: string;
   recordingMode: string;
   hotkey: string;
+  showIndicator: boolean;
   developerMode: boolean;
 }
 
@@ -93,6 +94,7 @@ const statusIndicator = document.getElementById("status-indicator")!;
 const statusText = document.getElementById("status-text")!;
 const statusDetail = document.getElementById("status-detail")!;
 const micSelect = document.getElementById("mic-select") as HTMLSelectElement;
+const indicatorToggle = document.getElementById("indicator-toggle") as HTMLInputElement;
 const engineGroq = document.getElementById("engine-groq")!;
 const engineOpenai = document.getElementById("engine-openai")!;
 const enginePolza = document.getElementById("engine-polza")!;
@@ -205,6 +207,9 @@ async function loadSettings() {
   }
   micSelect.value = savedMic;
 
+  // Recording indicator (on unless switched off)
+  indicatorToggle.checked = currentSettings.showIndicator !== false;
+
   // Engine
   setEngine(currentSettings.engine || "groq");
 
@@ -248,6 +253,7 @@ function setRecordingMode(mode: string) {
 
 async function saveSettings() {
   currentSettings.microphone = micSelect.value;
+  currentSettings.showIndicator = indicatorToggle.checked;
   currentSettings.groqApiKey = groqKey.value.trim();
   currentSettings.openaiEndpoint = openaiEndpoint.value.trim();
   currentSettings.openaiModel = openaiModel.value.trim();
@@ -287,6 +293,7 @@ enginePolza.addEventListener("click", () => {
 });
 
 micSelect.addEventListener("change", () => saveQuietly());
+indicatorToggle.addEventListener("change", () => saveQuietly());
 groqKey.addEventListener("change", () => saveQuietly());
 openaiEndpoint.addEventListener("change", () => saveQuietly());
 openaiModel.addEventListener("change", () => saveQuietly());

@@ -1,4 +1,8 @@
-//! Recording indicator in the top-right corner of the primary screen.
+//! Recording indicator near the top-right corner of the primary screen.
+//!
+//! It waits out of sight behind the top edge of the screen and slides down
+//! only while Typr records, transcribes and pastes (or briefly after a failed
+//! dictation), then slides back up.
 //!
 //! On Windows it is a native click-through layered window drawn in Rust, so
 //! Typr needs no WebView (and no browser process) while it sits in the tray.
@@ -18,18 +22,22 @@ pub enum Indicator {
 /// Where the indicator goes, derived from the primary monitor.
 #[derive(Debug, Clone, Copy)]
 pub struct Placement {
-    /// Top-left corner and side length in physical pixels
+    /// Window rectangle in physical pixels. It starts at the top edge of the
+    /// screen, so the indicator slides in from behind that edge.
     pub x: i32,
     pub y: i32,
-    pub size: i32,
+    pub width: i32,
+    pub height: i32,
     pub scale: f64,
-    /// Top-left corner in logical pixels (used by the WebView overlay)
+    /// Top-left corner of the window in logical pixels (used by the WebView overlay)
     pub logical_x: f64,
     pub logical_y: f64,
 }
 
-const WINDOW_SIZE: f64 = 50.0;
+/// Square around the disc in logical pixels, with room for its shadow and halo
+const INDICATOR_SIZE: f64 = 50.0;
 const OFFSET_FROM_RIGHT: f64 = 60.0;
+/// Gap between the top edge of the screen and the indicator once it has slid in
 const OFFSET_FROM_TOP: f64 = 10.0;
 
 impl Placement {
@@ -39,23 +47,35 @@ impl Placement {
         let left = width as f64 / scale - OFFSET_FROM_RIGHT;
         Self {
             x: x + (left * scale).round() as i32,
-            y: y + (OFFSET_FROM_TOP * scale).round() as i32,
-            size: (WINDOW_SIZE * scale).round().max(1.0) as i32,
+            y,
+            width: (INDICATOR_SIZE * scale).round().max(1.0) as i32,
+            height: ((OFFSET_FROM_TOP + INDICATOR_SIZE) * scale).round().max(1.0) as i32,
             scale,
             logical_x: left,
-            logical_y: OFFSET_FROM_TOP,
+            logical_y: 0.0,
         }
     }
 
     pub fn fallback() -> Self {
         Self {
             x: 1380,
-            y: 10,
-            size: WINDOW_SIZE as i32,
+            y: 0,
+            width: INDICATOR_SIZE as i32,
+            height: (OFFSET_FROM_TOP + INDICATOR_SIZE) as i32,
             scale: 1.0,
             logical_x: 1380.0,
-            logical_y: 10.0,
+            logical_y: 0.0,
         }
+    }
+
+    /// Vertical centre of the disc inside the window in physical pixels:
+    /// `shown` 0 is fully hidden above the screen edge, 1 is in place.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn center_y(&self, shown: f32) -> f32 {
+        let s = self.scale as f32;
+        let hidden = -(INDICATOR_SIZE / 2.0) as f32 * s;
+        let in_place = (OFFSET_FROM_TOP + INDICATOR_SIZE / 2.0) as f32 * s;
+        hidden + (in_place - hidden) * shown
     }
 }
 
@@ -90,14 +110,16 @@ pub fn flash_error(app: &AppHandle) {
     webview::flash_error(app);
 }
 
-pub fn set_visible(app: &AppHandle, visible: bool) {
+/// Allows or forbids the indicator. While forbidden it never appears: it is
+/// switched off in General, or the hotkey is turned off from the tray.
+pub fn set_enabled(app: &AppHandle, enabled: bool) {
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        native::set_visible(visible);
+        native::set_enabled(enabled);
     }
     #[cfg(not(target_os = "windows"))]
-    webview::set_visible(app, visible);
+    webview::set_enabled(app, enabled);
 }
 
 // ── Rendering ───────────────────────────────────────────
@@ -126,14 +148,18 @@ fn paint(r: u8, g: u8, b: u8, alpha: f32) -> Paint {
     }
 }
 
-/// Renders one frame as premultiplied BGRA, top-down rows, `size` × `size` pixels.
+/// Renders one frame as premultiplied BGRA, top-down rows, `width` × `height`
+/// pixels, with the disc centred horizontally and its centre at `center_y`
+/// (negative while it hides above the top edge).
 /// `t` is the time in seconds since the current look appeared (drives animations).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn render(look: Look, t: f32, size: usize, scale: f32) -> Vec<u8> {
-    let mut frame = vec![0u8; size * size * 4];
+fn render(look: Look, t: f32, width: usize, height: usize, center_y: f32, scale: f32) -> Vec<u8> {
+    let mut frame = vec![0u8; width * height * 4];
     let s = scale.max(0.5);
-    let center = size as f32 / 2.0;
+    let center_x = width as f32 / 2.0;
     let radius = 20.0 * s;
+    // Shadow and halo reach at most 4.5 logical px past the disc
+    let reach = radius + 8.0 * s;
 
     let dark = paint(31, 30, 29, 0.94);
     let clay = paint(217, 119, 87, 1.0);
@@ -159,12 +185,15 @@ fn render(look: Look, t: f32, size: usize, scale: f32) -> Vec<u8> {
     };
     let spinner_head = t * TAU / 0.9;
 
-    for py in 0..size {
-        for px in 0..size {
+    for py in 0..height {
+        let y = py as f32 + 0.5;
+        let dy = y - center_y;
+        if dy.abs() > reach {
+            continue; // nothing drawn on this row, it stays transparent
+        }
+        for px in 0..width {
             let x = px as f32 + 0.5;
-            let y = py as f32 + 0.5;
-            let dx = x - center;
-            let dy = y - center;
+            let dx = x - center_x;
             let dist = (dx * dx + dy * dy).sqrt();
             let mut pixel = [0.0f32; 4];
 
@@ -193,10 +222,10 @@ fn render(look: Look, t: f32, size: usize, scale: f32) -> Vec<u8> {
             }
 
             // Microphone glyph: 24-unit icon drawn 18 logical px wide, centred
-            let glyph = mic_sdf((x / s - 16.0) / 0.75, (y / s - 16.0) / 0.75) * 0.75 * s;
+            let glyph = mic_sdf(dx / s / 0.75 + 12.0, dy / s / 0.75 + 12.0) * 0.75 * s;
             over(&mut pixel, icon.rgb, icon.alpha * coverage(glyph));
 
-            let i = (py * size + px) * 4;
+            let i = (py * width + px) * 4;
             frame[i] = to_byte(pixel[2]);
             frame[i + 1] = to_byte(pixel[1]);
             frame[i + 2] = to_byte(pixel[0]);
@@ -282,7 +311,12 @@ mod native {
     const WM_REFRESH: u32 = WM_APP + 1;
     const ANIMATION_TIMER: usize = 1;
     const ERROR_TIMER: usize = 2;
+    /// Frame interval while sliding in or out
+    const SLIDE_FRAME_MS: u32 = 16;
+    /// Frame interval while in place and only the look animates
     const FRAME_MS: u32 = 33;
+    /// How long sliding in or out takes
+    const SLIDE_SECS: f32 = 0.22;
     const ERROR_MS: u64 = 2500;
 
     const STATE_IDLE: u8 = 0;
@@ -292,13 +326,18 @@ mod native {
     // Written from any thread; the window thread reads them on WM_REFRESH
     static WINDOW: AtomicIsize = AtomicIsize::new(0);
     static STATE: AtomicU8 = AtomicU8::new(STATE_IDLE);
-    static VISIBLE: AtomicBool = AtomicBool::new(true);
+    static ENABLED: AtomicBool = AtomicBool::new(true);
     static ERROR_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 
     thread_local! {
         static PLACEMENT: Cell<Option<Placement>> = Cell::new(None);
         // The look on screen and when it appeared (for animations)
         static SHOWN: Cell<(Look, Instant)> = Cell::new((Look::Idle, Instant::now()));
+        // How far the indicator has slid in (0 hidden, 1 in place) and when it
+        // last moved; `None` while it rests
+        static SLIDE: Cell<(f32, Option<Instant>)> = Cell::new((0.0, None));
+        // Whether the window is shown at all (it is hidden once fully slid out)
+        static ON_SCREEN: Cell<bool> = Cell::new(false);
     }
 
     pub fn create(placement: Placement) {
@@ -325,8 +364,8 @@ mod native {
         request_refresh();
     }
 
-    pub fn set_visible(visible: bool) {
-        VISIBLE.store(visible, Ordering::SeqCst);
+    pub fn set_enabled(enabled: bool) {
+        ENABLED.store(enabled, Ordering::SeqCst);
         request_refresh();
     }
 
@@ -382,8 +421,8 @@ mod native {
             WS_POPUP,
             placement.x,
             placement.y,
-            placement.size,
-            placement.size,
+            placement.width,
+            placement.height,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             instance,
@@ -395,13 +434,14 @@ mod native {
         }
         WINDOW.store(hwnd as isize, Ordering::SeqCst);
         log::info!(
-            "Overlay created at ({}, {}), {} px (native, no WebView)",
+            "Overlay created at ({}, {}), {}×{} px, hidden until a dictation starts (native, no WebView)",
             placement.x,
             placement.y,
-            placement.size
+            placement.width,
+            placement.height
         );
 
-        refresh(hwnd);
+        update(hwnd);
 
         let mut message: MSG = std::mem::zeroed();
         while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
@@ -418,30 +458,48 @@ mod native {
     ) -> LRESULT {
         match message {
             WM_REFRESH => {
-                refresh(hwnd);
+                update(hwnd);
                 0
             }
             WM_TIMER => {
                 if wparam == ERROR_TIMER {
                     KillTimer(hwnd, ERROR_TIMER);
-                    refresh(hwnd);
-                } else {
-                    draw(hwnd);
                 }
+                update(hwnd);
                 0
             }
             _ => DefWindowProcW(hwnd, message, wparam, lparam),
         }
     }
 
-    unsafe fn refresh(hwnd: HWND) {
-        if !VISIBLE.load(Ordering::SeqCst) {
-            KillTimer(hwnd, ANIMATION_TIMER);
-            KillTimer(hwnd, ERROR_TIMER);
-            ShowWindow(hwnd, SW_HIDE);
-            return;
-        }
+    /// Moves the slide position towards `target` (0 or 1) by the time since
+    /// the previous frame and returns it.
+    fn slide_towards(target: f32) -> f32 {
+        SLIDE.with(|slide| {
+            let (mut shown, last_frame) = slide.get();
+            let now = Instant::now();
+            if let Some(last_frame) = last_frame {
+                let step = now.duration_since(last_frame).as_secs_f32() / SLIDE_SECS;
+                shown = if target > shown {
+                    (shown + step).min(target)
+                } else {
+                    (shown - step).max(target)
+                };
+            }
+            let moving = shown != target;
+            slide.set((shown, if moving { Some(now) } else { None }));
+            shown
+        })
+    }
 
+    /// Fast at first, gentle at the end: sliding in decelerates into place,
+    /// sliding out accelerates away. Reversing midway never jumps.
+    fn ease(shown: f32) -> f32 {
+        1.0 - (1.0 - shown).powi(3)
+    }
+
+    /// Brings the window up to date: look, slide position, timers, visibility.
+    unsafe fn update(hwnd: HWND) {
         let look = current_look();
         SHOWN.with(|shown| {
             if shown.get().0 != look {
@@ -449,12 +507,22 @@ mod native {
             }
         });
 
-        // Animate only while something moves; idle costs no CPU at all
-        if look == Look::Recording || look == Look::Transcribing {
-            SetTimer(hwnd, ANIMATION_TIMER, FRAME_MS, None);
-        } else {
+        let enabled = ENABLED.load(Ordering::SeqCst);
+        // Out of sight while idle; slides in for a dictation or an error
+        let target = if enabled && look != Look::Idle { 1.0 } else { 0.0 };
+        let shown = slide_towards(target);
+
+        if !enabled || (target == 0.0 && shown == 0.0) {
+            // Fully hidden: no window, no timers, no CPU
             KillTimer(hwnd, ANIMATION_TIMER);
+            KillTimer(hwnd, ERROR_TIMER);
+            SLIDE.with(|slide| slide.set((0.0, None)));
+            if ON_SCREEN.with(|on_screen| on_screen.replace(false)) {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+            return;
         }
+
         if look == Look::Error {
             let remaining = ERROR_UNTIL_MS
                 .load(Ordering::SeqCst)
@@ -463,20 +531,35 @@ mod native {
             SetTimer(hwnd, ERROR_TIMER, remaining as u32, None);
         }
 
-        draw(hwnd);
-        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        draw(hwnd, ease(shown));
+        if !ON_SCREEN.with(|on_screen| on_screen.replace(true)) {
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+
+        // Tick only while something moves; a still indicator costs no CPU
+        if shown != target {
+            SetTimer(hwnd, ANIMATION_TIMER, SLIDE_FRAME_MS, None);
+        } else if look == Look::Recording || look == Look::Transcribing {
+            SetTimer(hwnd, ANIMATION_TIMER, FRAME_MS, None);
+        } else {
+            KillTimer(hwnd, ANIMATION_TIMER);
+        }
     }
 
-    unsafe fn draw(hwnd: HWND) {
+    /// `shown` is the eased slide position: 0 hidden above the screen edge, 1 in place.
+    unsafe fn draw(hwnd: HWND, shown: f32) {
         let Some(placement) = PLACEMENT.with(|cell| cell.get()) else {
             return;
         };
-        let (look, since) = SHOWN.with(|shown| shown.get());
-        let size = placement.size.max(1);
+        let (look, since) = SHOWN.with(|cell| cell.get());
+        let width = placement.width.max(1);
+        let height = placement.height.max(1);
         let pixels = render(
             look,
             since.elapsed().as_secs_f32(),
-            size as usize,
+            width as usize,
+            height as usize,
+            placement.center_y(shown),
             placement.scale as f32,
         );
 
@@ -485,8 +568,8 @@ mod native {
 
         let mut info: BITMAPINFO = std::mem::zeroed();
         info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        info.bmiHeader.biWidth = size;
-        info.bmiHeader.biHeight = -size; // negative: top-down rows
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height; // negative: top-down rows
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = 0; // BI_RGB
@@ -508,7 +591,10 @@ mod native {
                 x: placement.x,
                 y: placement.y,
             };
-            let extent = SIZE { cx: size, cy: size };
+            let extent = SIZE {
+                cx: width,
+                cy: height,
+            };
             let origin = POINT { x: 0, y: 0 };
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -541,13 +627,26 @@ mod native {
 
 #[cfg(not(target_os = "windows"))]
 mod webview {
-    use super::{Indicator, Placement};
+    use super::{Indicator, Placement, INDICATOR_SIZE, OFFSET_FROM_TOP};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
     use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
+    const ERROR_MS: u64 = 2500;
     const ERROR_JS: &str = "(function(){var m=document.getElementById('mic');if(!m)return;\
                             m.className='mic error';clearTimeout(window.__typrError);\
                             window.__typrError=setTimeout(function(){\
                             if(m.className==='mic error')m.className='mic';},2500);})();";
+    /// Replays the slide-in animation from behind the top edge
+    const SLIDE_IN_JS: &str = "(function(){var s=document.getElementById('slot');if(!s)return;\
+                               s.classList.remove('enter');void s.offsetWidth;\
+                               s.classList.add('enter');})();";
+
+    static ENABLED: AtomicBool = AtomicBool::new(true);
+    /// Recording or transcribing right now
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    /// Bumped on every error flash, so only the latest one hides the window
+    static ERRORS: AtomicU64 = AtomicU64::new(0);
 
     pub fn create(app: &AppHandle, placement: Placement) {
         let built = WebviewWindowBuilder::new(
@@ -556,7 +655,7 @@ mod webview {
             WebviewUrl::App("src/overlay.html".into()),
         )
         .title("")
-        .inner_size(50.0, 50.0)
+        .inner_size(INDICATOR_SIZE, OFFSET_FROM_TOP + INDICATOR_SIZE)
         .position(placement.logical_x, placement.logical_y)
         .resizable(false)
         .decorations(false)
@@ -565,10 +664,11 @@ mod webview {
         .skip_taskbar(true)
         .focused(false)
         .shadow(false)
+        .visible(false)
         .build();
 
         match built {
-            Ok(_) => log::info!("Overlay window created"),
+            Ok(_) => log::info!("Overlay window created, hidden until a dictation starts"),
             Err(e) => log::error!("Failed to create overlay: {}", e),
         }
     }
@@ -578,6 +678,24 @@ mod webview {
             if let Err(e) = overlay.eval(js) {
                 log::debug!("Failed to update overlay: {}", e);
             }
+        }
+    }
+
+    fn show(app: &AppHandle) {
+        if !ENABLED.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            if !overlay.is_visible().unwrap_or(false) {
+                let _ = overlay.eval(SLIDE_IN_JS);
+                let _ = overlay.show();
+            }
+        }
+    }
+
+    fn hide(app: &AppHandle) {
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            let _ = overlay.hide();
         }
     }
 
@@ -591,15 +709,36 @@ mod webview {
             app,
             &format!("document.getElementById('mic').className = '{}';", class),
         );
+
+        let active = indicator != Indicator::Idle;
+        ACTIVE.store(active, Ordering::SeqCst);
+        if active {
+            show(app);
+        } else {
+            hide(app);
+        }
     }
 
     pub fn flash_error(app: &AppHandle) {
         eval(app, ERROR_JS);
+        show(app);
+
+        let flash = ERRORS.fetch_add(1, Ordering::SeqCst) + 1;
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(ERROR_MS));
+            if ERRORS.load(Ordering::SeqCst) == flash && !ACTIVE.load(Ordering::SeqCst) {
+                hide(&app);
+            }
+        });
     }
 
-    pub fn set_visible(app: &AppHandle, visible: bool) {
-        if let Some(overlay) = app.get_webview_window("overlay") {
-            let _ = if visible { overlay.show() } else { overlay.hide() };
+    pub fn set_enabled(app: &AppHandle, enabled: bool) {
+        ENABLED.store(enabled, Ordering::SeqCst);
+        if !enabled {
+            hide(app);
+        } else if ACTIVE.load(Ordering::SeqCst) {
+            show(app);
         }
     }
 }
@@ -610,11 +749,25 @@ mod tests {
 
     #[test]
     fn test_render_has_transparent_corners_and_opaque_disc() {
-        let frame = render(Look::Idle, 0.0, 50, 1.0);
-        assert_eq!(frame.len(), 50 * 50 * 4);
+        let frame = render(Look::Idle, 0.0, 50, 60, 35.0, 1.0);
+        assert_eq!(frame.len(), 50 * 60 * 4);
         assert_eq!(frame[3], 0);
-        let inside = (25 * 50 + 10) * 4;
+        let inside = (35 * 50 + 10) * 4;
         assert!(frame[inside + 3] > 200);
+    }
+
+    #[test]
+    fn test_render_hidden_indicator_is_fully_transparent() {
+        let placement = Placement::fallback();
+        let frame = render(
+            Look::Recording,
+            0.0,
+            placement.width as usize,
+            placement.height as usize,
+            placement.center_y(0.0),
+            1.0,
+        );
+        assert!(frame.chunks(4).all(|pixel| pixel[3] == 0));
     }
 
     #[test]
@@ -626,8 +779,11 @@ mod tests {
     #[test]
     fn test_placement_for_monitor() {
         let placement = Placement::for_monitor(0, 0, 3840, 2.0);
-        assert_eq!(placement.size, 100);
+        assert_eq!(placement.width, 100);
+        assert_eq!(placement.height, 120);
         assert_eq!(placement.x, 3840 - 120);
-        assert_eq!(placement.y, 20);
+        assert_eq!(placement.y, 0);
+        assert_eq!(placement.center_y(1.0), 70.0);
+        assert_eq!(placement.center_y(0.0), -50.0);
     }
 }

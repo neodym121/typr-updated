@@ -26,6 +26,10 @@ fn default_hotkey() -> String {
     "Ctrl+Shift+Space".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
     pub microphone: String,
@@ -49,6 +53,9 @@ pub struct Settings {
     pub recording_mode: String,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    /// Recording indicator that slides in at the top of the screen while dictating
+    #[serde(rename = "showIndicator", default = "default_true")]
+    pub show_indicator: bool,
     /// Shows the Developer section and turns on log collection
     #[serde(rename = "developerMode", default)]
     pub developer_mode: bool,
@@ -68,6 +75,7 @@ impl Default for Settings {
             polza_provider: String::new(),
             recording_mode: "toggle".to_string(),
             hotkey: "Ctrl+Shift+Space".to_string(),
+            show_indicator: true,
             developer_mode: false,
         }
     }
@@ -110,7 +118,7 @@ impl Settings {
     /// only whether they are set.
     pub fn summary(&self) -> String {
         format!(
-            "engine={}, mode={}, hotkey={}, mic='{}', groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, developerMode={}",
+            "engine={}, mode={}, hotkey={}, mic='{}', groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, showIndicator={}, developerMode={}",
             self.engine,
             self.recording_mode,
             self.hotkey,
@@ -122,6 +130,7 @@ impl Settings {
             self.polza_model,
             if self.polza_provider.is_empty() { "auto" } else { self.polza_provider.as_str() },
             key_state(&self.polza_api_key),
+            self.show_indicator,
             self.developer_mode
         )
     }
@@ -157,6 +166,13 @@ impl Settings {
             }
         }
 
+        if old.show_indicator != self.show_indicator {
+            changes.push(format!(
+                "showIndicator: {} → {}",
+                old.show_indicator, self.show_indicator
+            ));
+        }
+
         if old.developer_mode != self.developer_mode {
             changes.push(format!(
                 "developerMode: {} → {}",
@@ -187,6 +203,7 @@ mod tests {
         assert_eq!(settings.polza_provider, "");
         assert_eq!(settings.recording_mode, "toggle");
         assert_eq!(settings.hotkey, "Ctrl+Shift+Space");
+        assert!(settings.show_indicator);
         assert!(!settings.developer_mode);
     }
 
@@ -210,6 +227,13 @@ mod tests {
         let settings: Settings =
             serde_json::from_str(r#"{"microphone":"default","engine":"groq"}"#).unwrap();
         assert!(!settings.developer_mode);
+    }
+
+    #[test]
+    fn test_missing_show_indicator_defaults_to_true() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"microphone":"default","engine":"groq"}"#).unwrap();
+        assert!(settings.show_indicator);
     }
 
     #[test]

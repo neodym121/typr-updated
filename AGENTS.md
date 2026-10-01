@@ -10,7 +10,7 @@ Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Ru
 typr/
 ├── src/                        # TypeScript frontend (Vite)
 │   ├── main.ts                 # Main UI logic, settings form, hotkey binding
-│   ├── overlay.html            # Floating mic indicator overlay window
+│   ├── overlay.html            # Mic indicator overlay (WebView fallback for non-Windows)
 │   └── style.css               # Global styles
 ├── src-tauri/                  # Rust backend (Tauri)
 │   └── src/
@@ -23,7 +23,7 @@ typr/
 │       ├── transcribe_polza.rs # Polza.AI client (JSON body, base64 data URL)
 │       ├── net.rs              # Shared HTTP client (timeouts) + response/error helpers
 │       ├── logger.rs           # `log` backend feeding the Developer section
-│       ├── overlay.rs          # Recording indicator: native layered window on Windows
+│       ├── overlay.rs          # Recording indicator that slides in while dictating (native layered window on Windows)
 │       ├── cleanup.rs          # Post-processing: trims filler words, fixes punctuation
 │       ├── paste.rs            # Simulates Ctrl+V to paste text into active window
 │       └── settings.rs         # Settings struct, load/save from config.json
@@ -46,7 +46,7 @@ Manages the `RecordingState` state machine (`Ready → Recording → Transcribin
 3. Calls the configured transcription engine
 4. Runs `cleanup_text()` on the result
 5. Calls `paste_text()` to inject into the active window
-6. Emits `recording-state` events to the frontend and updates the overlay window
+6. Emits `recording-state` events to the frontend and updates the overlay (the indicator slides in for Recording/Transcribing and back out on Ready)
 
 ### `settings.rs` — Configuration
 Persisted to `config.json` in the Tauri app data directory. Key fields:
@@ -56,6 +56,7 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 - `microphone`: device name or `"default"`
 - `recordingMode`: `"toggle"` | `"push-to-talk"`
 - `hotkey`: default `"Ctrl+Shift+Space"`
+- `showIndicator`: whether the recording indicator may appear at all (default `true`, switch in General)
 
 > **Note:** The legacy `"local"` engine value is silently migrated to `"groq"` on load.
 
@@ -72,8 +73,10 @@ Installed as the global `log` backend in `main()`. Use `log::info!` / `log::warn
 
 ### Memory: no WebView while idle
 - `overlay.rs` draws the recording indicator itself on Windows (`windows-sys` layered window, per-pixel alpha, SDF rendering) — no WebView. Other platforms fall back to the WebView overlay `src/overlay.html`.
+- The indicator is out of sight while idle: its window starts at the top edge of the primary screen and the disc is drawn above that edge, so it slides in from behind the screen when a dictation starts (or briefly after an error) and slides back out on `Ready`. Once fully out, the window is hidden and its timers stop, so it costs no CPU.
+- `overlay::set_enabled` gates it: `main.rs::sync_overlay` allows it only while `showIndicator` is on and the hotkey is on in the tray.
 - Closing the main window destroys it (and its WebView); `show_main_window` re-creates it from `tauri.conf.json` on a separate thread (building windows in event handlers deadlocks on Windows). `RunEvent::ExitRequested` without a code is prevented, so Typr keeps running in the tray; tray → Exit calls `app.exit(0)`.
-- The tray menu's "Hotkey: On/Off" item unregisters the global shortcut, cancels an unfinished recording and hides the overlay (e.g. while gaming). The state is not persisted.
+- The tray menu's "Hotkey: On/Off" item unregisters the global shortcut, cancels an unfinished recording and keeps the overlay from appearing (e.g. while gaming). The state is not persisted.
 
 ---
 

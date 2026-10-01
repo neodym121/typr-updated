@@ -119,11 +119,19 @@ fn set_hotkey_enabled(app: &tauri::AppHandle, enabled: bool) {
         log::info!("Hotkey turned off from the tray, shortcuts are ignored until it is back on");
     }
 
-    // Nothing on top of games while the hotkey is off
-    overlay::set_visible(app, enabled);
+    sync_overlay(app);
     if let Err(e) = app.emit("hotkey-enabled", enabled) {
         log::debug!("Failed to emit hotkey-enabled: {}", e);
     }
+}
+
+/// The recording indicator may appear only while it is switched on in General
+/// and the hotkey is on (nothing pops up over games while it's off in the tray).
+fn sync_overlay(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let allowed = state.hotkey_enabled.load(Ordering::SeqCst)
+        && state.settings.lock().unwrap().show_indicator;
+    overlay::set_enabled(app, allowed);
 }
 
 #[tauri::command]
@@ -164,7 +172,11 @@ fn save_settings(
         log::info!("Settings saved: {}", changes.join("; "));
     }
 
+    let indicator_changed = settings.show_indicator != old.show_indicator;
     *state.settings.lock().unwrap() = settings;
+    if indicator_changed {
+        sync_overlay(&app);
+    }
     Ok(())
 }
 
@@ -468,7 +480,8 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Recording indicator (small mic, top-right, always on top)
+            // Recording indicator (small mic, top-right, always on top). It waits
+            // behind the top edge of the screen and slides in only while dictating
             let placement = match app.primary_monitor().ok().flatten() {
                 Some(monitor) => Placement::for_monitor(
                     monitor.position().x,
@@ -479,6 +492,7 @@ fn main() {
                 None => Placement::fallback(),
             };
             overlay::create(app.handle(), placement);
+            sync_overlay(app.handle());
 
             if let Err(e) = register_hotkey(app.handle(), &initial_hotkey) {
                 log::error!("Failed to register initial global shortcut: {}", e);

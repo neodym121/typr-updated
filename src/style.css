@@ -288,19 +288,6 @@ button {
   background: var(--surface-active);
 }
 
-/* Clay accent mark on the current page */
-.nav-item.active::after {
-  content: '';
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--clay);
-  transform: translateY(-50%);
-}
-
 .nav-icon {
   width: 16px;
   height: 16px;
