@@ -5,13 +5,22 @@ use std::time::Instant;
 use crate::net;
 
 const GROQ_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
-const GROQ_MODEL: &str = "whisper-large-v3-turbo";
+const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 
-pub async fn transcribe_groq(api_key: &str, audio_path: &PathBuf) -> Result<String, String> {
+/// `model` is "whisper-large-v3-turbo" (faster) or "whisper-large-v3".
+pub async fn transcribe_groq(
+    api_key: &str,
+    model: &str,
+    audio_path: &PathBuf,
+) -> Result<String, String> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
         return Err("Groq API key not set. Please enter your API key in settings.".to_string());
     }
+    let model = match model.trim() {
+        "" => DEFAULT_MODEL,
+        other => other,
+    };
 
     let audio_bytes = std::fs::read(audio_path)
         .map_err(|e| format!("Failed to read audio file: {}", e))?;
@@ -23,11 +32,11 @@ pub async fn transcribe_groq(api_key: &str, audio_path: &PathBuf) -> Result<Stri
         .map_err(|e| e.to_string())?;
 
     let form = multipart::Form::new()
-        .text("model", GROQ_MODEL)
+        .text("model", model.to_string())
         .text("response_format", "json")
         .part("file", file_part);
 
-    log::info!("Groq: POST {} (model {}, {} KB)", GROQ_URL, GROQ_MODEL, size_kb);
+    log::info!("Groq: POST {} (model {}, {} KB)", GROQ_URL, model, size_kb);
     let started = Instant::now();
     let response = net::client()?
         .post(GROQ_URL)
@@ -47,7 +56,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_api_key() {
         let path = PathBuf::from("/tmp/test.wav");
-        let result = transcribe_groq("", &path).await;
+        let result = transcribe_groq("", "", &path).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("API key not set"));
     }

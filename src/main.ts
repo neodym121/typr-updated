@@ -2,12 +2,14 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { enhanceSelect, syncSelect } from "./dropdown";
 import { getLanguage, setLanguage, t, type Lang, type MessageKey } from "./i18n";
 
 interface Settings {
   microphone: string;
   engine: string;
   groqApiKey: string;
+  groqModel: string;
   openaiEndpoint: string;
   openaiModel: string;
   openaiApiKey: string;
@@ -18,6 +20,7 @@ interface Settings {
   assemblyaiModel: string;
   recordingMode: string;
   hotkey: string;
+  appendSpace: boolean;
   showIndicator: boolean;
   /** "en", "ru", or empty to follow the system */
   language: string;
@@ -109,6 +112,7 @@ const openaiSettings = document.getElementById("openai-settings")!;
 const polzaSettings = document.getElementById("polza-settings")!;
 const assemblyaiSettings = document.getElementById("assemblyai-settings")!;
 const groqKey = document.getElementById("groq-key") as HTMLInputElement;
+const groqModel = document.getElementById("groq-model") as HTMLSelectElement;
 const openaiEndpoint = document.getElementById("openai-endpoint") as HTMLInputElement;
 const openaiModel = document.getElementById("openai-model") as HTMLInputElement;
 const openaiKey = document.getElementById("openai-key") as HTMLInputElement;
@@ -117,13 +121,13 @@ const polzaModel = document.getElementById("polza-model") as HTMLInputElement;
 const polzaProvider = document.getElementById("polza-provider") as HTMLInputElement;
 const assemblyaiKey = document.getElementById("assemblyai-key") as HTMLInputElement;
 const assemblyaiModel = document.getElementById("assemblyai-model") as HTMLSelectElement;
-const assemblyaiModelNote = document.getElementById("assemblyai-model-note")!;
 const languageButtons = document.querySelectorAll<HTMLButtonElement>("#language-select .segment");
 const modeToggle = document.getElementById("mode-toggle")!;
 const modePtt = document.getElementById("mode-ptt")!;
 const hotkeyBtn = document.getElementById("hotkey-btn")!;
 const hotkeyText = document.getElementById("hotkey-text")!;
 const hotkeyHint = document.getElementById("hotkey-hint")!;
+const appendSpaceToggle = document.getElementById("append-space-toggle") as HTMLInputElement;
 const devModeToggle = document.getElementById("dev-mode-toggle") as HTMLInputElement;
 const navDeveloper = document.getElementById("nav-developer")!;
 const devBadge = document.getElementById("dev-badge")!;
@@ -180,8 +184,11 @@ let microphones: MicDevice[] = [];
 let microphonesLoaded = false;
 let systemLanguage: Lang = "en";
 
+const GROQ_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"];
 const ASSEMBLYAI_MODELS = ["universal-3-5-pro", "universal-2"];
-const ASSEMBLYAI_PRO = "universal-3-5-pro";
+
+// App-styled lists instead of the browser's native <select> popup
+[micSelect, groqModel, assemblyaiModel].forEach(enhanceSelect);
 
 // The window stays hidden until its language is known (see .i18n-pending);
 // the timeout makes sure a failed startup never leaves it blank
@@ -239,6 +246,7 @@ function renderMicOptions() {
     micSelect.appendChild(new Option(t("general.notConnected", { name: selected }), selected));
   }
   micSelect.value = selected;
+  syncSelect(micSelect);
 }
 
 async function loadSettings() {
@@ -271,6 +279,7 @@ async function loadSettings() {
 
   // Groq key
   groqKey.value = currentSettings.groqApiKey || "";
+  setChoice(groqModel, GROQ_MODELS, currentSettings.groqModel);
 
   // OpenAI Compatible settings
   openaiEndpoint.value = currentSettings.openaiEndpoint || "https://api.openai.com/v1";
@@ -284,13 +293,14 @@ async function loadSettings() {
 
   // AssemblyAI settings
   assemblyaiKey.value = currentSettings.assemblyaiApiKey || "";
-  setAssemblyaiModel(currentSettings.assemblyaiModel || ASSEMBLYAI_PRO);
+  setChoice(assemblyaiModel, ASSEMBLYAI_MODELS, currentSettings.assemblyaiModel);
 
   // Recording mode
   setRecordingMode(currentSettings.recordingMode || "toggle");
 
   // Hotkey
   displayHotkey(currentSettings.hotkey);
+  appendSpaceToggle.checked = Boolean(currentSettings.appendSpace);
 
   uiLog("debug", `Settings loaded, ${microphones.length} microphone(s) available`);
 }
@@ -307,14 +317,10 @@ function setEngine(engine: string) {
   assemblyaiSettings.classList.toggle("hidden", engine !== "assemblyai");
 }
 
-// Universal-3.5 Pro has no Russian, a quiet note says so while it's selected
-function setAssemblyaiModel(model: string) {
-  assemblyaiModel.value = ASSEMBLYAI_MODELS.includes(model) ? model : ASSEMBLYAI_PRO;
-  updateAssemblyaiNote();
-}
-
-function updateAssemblyaiNote() {
-  assemblyaiModelNote.classList.toggle("hidden", assemblyaiModel.value !== ASSEMBLYAI_PRO);
+// Selects a saved model; an unknown one falls back to the first option
+function setChoice(select: HTMLSelectElement, allowed: string[], value: string | undefined) {
+  select.value = value && allowed.includes(value) ? value : allowed[0];
+  syncSelect(select);
 }
 
 function setRecordingMode(mode: string) {
@@ -327,6 +333,7 @@ async function saveSettings() {
   currentSettings.microphone = micSelect.value;
   currentSettings.showIndicator = indicatorToggle.checked;
   currentSettings.groqApiKey = groqKey.value.trim();
+  currentSettings.groqModel = groqModel.value;
   currentSettings.openaiEndpoint = openaiEndpoint.value.trim();
   currentSettings.openaiModel = openaiModel.value.trim();
   currentSettings.openaiApiKey = openaiKey.value.trim();
@@ -335,6 +342,7 @@ async function saveSettings() {
   currentSettings.polzaProvider = polzaProvider.value.trim();
   currentSettings.assemblyaiApiKey = assemblyaiKey.value.trim();
   currentSettings.assemblyaiModel = assemblyaiModel.value;
+  currentSettings.appendSpace = appendSpaceToggle.checked;
   currentSettings.developerMode = devModeToggle.checked;
   try {
     await invoke("save_settings", { settings: currentSettings });
@@ -374,6 +382,8 @@ engineAssemblyai.addEventListener("click", () => {
 micSelect.addEventListener("change", () => saveQuietly());
 indicatorToggle.addEventListener("change", () => saveQuietly());
 groqKey.addEventListener("change", () => saveQuietly());
+groqModel.addEventListener("change", () => saveQuietly());
+appendSpaceToggle.addEventListener("change", () => saveQuietly());
 openaiEndpoint.addEventListener("change", () => saveQuietly());
 openaiModel.addEventListener("change", () => saveQuietly());
 openaiKey.addEventListener("change", () => saveQuietly());
@@ -381,10 +391,7 @@ polzaKey.addEventListener("change", () => saveQuietly());
 polzaModel.addEventListener("change", () => saveQuietly());
 polzaProvider.addEventListener("change", () => saveQuietly());
 assemblyaiKey.addEventListener("change", () => saveQuietly());
-assemblyaiModel.addEventListener("change", () => {
-  updateAssemblyaiNote();
-  saveQuietly();
-});
+assemblyaiModel.addEventListener("change", () => saveQuietly());
 
 languageButtons.forEach((button) => {
   button.addEventListener("click", () => {

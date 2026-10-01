@@ -179,12 +179,16 @@ impl Recorder {
         let raw_text = transcription?;
         log::debug!("Raw transcription: {:?}", raw_text);
 
-        let cleaned = cleanup_text(&raw_text);
+        let mut cleaned = cleanup_text(&raw_text);
         if cleaned.is_empty() {
             log::warn!("Transcription is empty, nothing to paste");
             return Ok(cleaned);
         }
         log::info!("Transcribed text: {}", cleaned);
+        // So the next dictation doesn't stick to this one
+        if settings.append_space {
+            cleaned.push(' ');
+        }
 
         paste_text(&cleaned)?;
         log::info!("Text pasted into the active window");
@@ -195,7 +199,10 @@ impl Recorder {
 
 async fn transcribe(settings: &Settings, audio_path: &PathBuf) -> Result<String, String> {
     match settings.engine.as_str() {
-        "groq" => transcribe_groq::transcribe_groq(&settings.groq_api_key, audio_path).await,
+        "groq" => {
+            transcribe_groq::transcribe_groq(&settings.groq_api_key, &settings.groq_model, audio_path)
+                .await
+        }
         "openai" | "openai-compatible" => {
             transcribe_openai::transcribe_openai(
                 &settings.openai_endpoint,

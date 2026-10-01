@@ -11,6 +11,7 @@ typr/
 ├── src/                        # TypeScript frontend (Vite)
 │   ├── main.ts                 # Main UI logic, settings form, hotkey binding
 │   ├── i18n.ts                 # English/Russian UI strings, t(), data-i18n attributes
+│   ├── dropdown.ts             # App-styled dropdowns over hidden native <select>s
 │   ├── overlay.html            # Mic indicator overlay (WebView fallback for non-Windows)
 │   └── style.css               # Global styles
 ├── src-tauri/                  # Rust backend (Tauri)
@@ -29,7 +30,7 @@ typr/
 │       ├── logger.rs           # `log` backend feeding the Developer section
 │       ├── overlay.rs          # Recording indicator that slides in while dictating (native layered window on Windows)
 │       ├── cleanup.rs          # Post-processing: trims filler words, fixes punctuation
-│       ├── paste.rs            # Simulates Ctrl+V to paste text into active window
+│       ├── paste.rs            # Pastes via the clipboard (Ctrl+V), then restores the previous content
 │       └── settings.rs         # Settings struct, load/save from config.json
 ├── .github/workflows/
 │   └── build.yml               # CI: builds Windows installer on tag push or manual trigger
@@ -55,6 +56,7 @@ Manages the `RecordingState` state machine (`Ready → Recording → Transcribin
 ### `settings.rs` — Configuration
 Persisted to `config.json` in the Tauri app data directory. Key fields:
 - `engine`: `"groq"` | `"openai"` | `"openai-compatible"` | `"polza"` | `"assemblyai"` (default: `"groq"`)
+- `groqModel`: `"whisper-large-v3-turbo"` (default) | `"whisper-large-v3"`
 - `groqApiKey`, `openaiApiKey`, `openaiEndpoint`, `openaiModel`, `polzaApiKey`, `polzaModel`, `polzaProvider`, `assemblyaiApiKey`
 - `assemblyaiModel`: `"universal-3-5-pro"` (default, no Russian) | `"universal-2"`
 - `language`: `"en"` | `"ru"` | `""` (empty follows the system, see `i18n.rs`)
@@ -62,6 +64,7 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 - `microphone`: device name or `"default"`
 - `recordingMode`: `"toggle"` | `"push-to-talk"`
 - `hotkey`: default `"Ctrl+Shift+Space"`
+- `appendSpace`: adds a space after the pasted text (default `false`, switch in Recording)
 - `showIndicator`: whether the recording indicator may appear at all (default `true`, switch in General)
 
 > **Note:** The legacy `"local"` engine value is silently migrated to `"groq"` on load.
@@ -70,7 +73,13 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 Both send a multipart form POST with the WAV file to the respective API. `transcribe_openai.rs` is also used for any OpenAI-compatible endpoint (e.g. local Whisper servers) via the configurable `openaiEndpoint`.
 
 ### `transcribe_assemblyai.rs`
-Three steps: `POST /v2/upload` with the raw WAV, `POST /v2/transcript` with `speech_models: [model]` and `language_detection: true`, then poll `GET /v2/transcript/{id}` until `completed` or `error`. Universal-3.5 Pro supports 18 languages without Russian; the UI shows a note while it is selected.
+Three steps: `POST /v2/upload` with the raw WAV, `POST /v2/transcript` with `speech_models: [model]` and `language_detection: true`, then poll `GET /v2/transcript/{id}` until `completed` or `error`. Universal-3.5 Pro supports 18 languages without Russian; if it rejects the language, the error suggests Universal-2.
+
+### `paste.rs` — clean clipboard
+Saves the clipboard (text, else image, else nothing), sets the dictated text with arboard's `exclude_from_monitoring()` (kept out of Win+V history, cloud sync and clipboard managers), sends Ctrl+V, waits `RESTORE_DELAY` (300 ms) and puts the previous content back, unless something else was copied meanwhile. If the paste fails, the text stays on the clipboard. Other formats (e.g. copied files) aren't restored.
+
+### `dropdown.ts`
+`enhanceSelect(select)` hides a native `<select>` and draws an app-styled button and list over it; the `<select>` stays the source of truth (`.value`, `change` events), option rebuilds are picked up by a `MutationObserver`, and after setting `.value` from code call `syncSelect(select)`. New `<select>`s should be enhanced too.
 
 ### `keyboard.rs` — hotkey pressed on its own
 On `ShortcutState::Pressed` with the recorder `Ready`, `HotkeyKeys::extra_keys_held()` reads every key and mouse button via `GetAsyncKeyState`; if anything besides the hotkey's own keys is down, the press is ignored (logged). Stopping a recording is never blocked.

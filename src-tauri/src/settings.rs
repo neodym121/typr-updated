@@ -6,6 +6,10 @@ fn default_engine() -> String {
     "groq".to_string()
 }
 
+fn default_groq_model() -> String {
+    "whisper-large-v3-turbo".to_string()
+}
+
 fn default_openai_endpoint() -> String {
     "https://api.openai.com/v1".to_string()
 }
@@ -41,6 +45,9 @@ pub struct Settings {
     pub engine: String,
     #[serde(rename = "groqApiKey", default)]
     pub groq_api_key: String,
+    /// "whisper-large-v3-turbo" or "whisper-large-v3"
+    #[serde(rename = "groqModel", default = "default_groq_model")]
+    pub groq_model: String,
     #[serde(rename = "openaiEndpoint", default = "default_openai_endpoint")]
     pub openai_endpoint: String,
     #[serde(rename = "openaiModel", default = "default_openai_model")]
@@ -62,6 +69,9 @@ pub struct Settings {
     pub recording_mode: String,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    /// Adds a space after the pasted text, so the next dictation doesn't stick to it
+    #[serde(rename = "appendSpace", default)]
+    pub append_space: bool,
     /// Recording indicator that slides in at the top of the screen while dictating
     #[serde(rename = "showIndicator", default = "default_true")]
     pub show_indicator: bool,
@@ -79,6 +89,7 @@ impl Default for Settings {
             microphone: "default".to_string(),
             engine: "groq".to_string(),
             groq_api_key: String::new(),
+            groq_model: "whisper-large-v3-turbo".to_string(),
             openai_endpoint: "https://api.openai.com/v1".to_string(),
             openai_model: "whisper-1".to_string(),
             openai_api_key: String::new(),
@@ -89,6 +100,7 @@ impl Default for Settings {
             assemblyai_model: "universal-3-5-pro".to_string(),
             recording_mode: "toggle".to_string(),
             hotkey: "Ctrl+Shift+Space".to_string(),
+            append_space: false,
             show_indicator: true,
             language: String::new(),
             developer_mode: false,
@@ -133,11 +145,13 @@ impl Settings {
     /// only whether they are set.
     pub fn summary(&self) -> String {
         format!(
-            "engine={}, mode={}, hotkey={}, mic='{}', groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, assemblyaiModel={}, assemblyaiKey={}, showIndicator={}, language={}, developerMode={}",
+            "engine={}, mode={}, hotkey={}, appendSpace={}, mic='{}', groqModel={}, groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, assemblyaiModel={}, assemblyaiKey={}, showIndicator={}, language={}, developerMode={}",
             self.engine,
             self.recording_mode,
             self.hotkey,
+            self.append_space,
             self.microphone,
+            self.groq_model,
             key_state(&self.groq_api_key),
             self.openai_endpoint,
             self.openai_model,
@@ -162,6 +176,7 @@ impl Settings {
             ("microphone", &old.microphone, &self.microphone),
             ("recordingMode", &old.recording_mode, &self.recording_mode),
             ("hotkey", &old.hotkey, &self.hotkey),
+            ("groqModel", &old.groq_model, &self.groq_model),
             ("openaiEndpoint", &old.openai_endpoint, &self.openai_endpoint),
             ("openaiModel", &old.openai_model, &self.openai_model),
             ("polzaModel", &old.polza_model, &self.polza_model),
@@ -185,6 +200,13 @@ impl Settings {
             if before != after {
                 changes.push(format!("{} updated ({})", name, key_state(after)));
             }
+        }
+
+        if old.append_space != self.append_space {
+            changes.push(format!(
+                "appendSpace: {} → {}",
+                old.append_space, self.append_space
+            ));
         }
 
         if old.show_indicator != self.show_indicator {
@@ -216,6 +238,8 @@ mod tests {
         assert_eq!(settings.microphone, "default");
         assert_eq!(settings.engine, "groq");
         assert_eq!(settings.groq_api_key, "");
+        assert_eq!(settings.groq_model, "whisper-large-v3-turbo");
+        assert!(!settings.append_space);
         assert_eq!(settings.openai_endpoint, "https://api.openai.com/v1");
         assert_eq!(settings.openai_model, "whisper-1");
         assert_eq!(settings.openai_api_key, "");

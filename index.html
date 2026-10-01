@@ -57,7 +57,7 @@
           </button>
         </nav>
         <div class="sidebar-footer">
-          <span class="version-text" id="version-text">v1.0.5</span>
+          <span class="version-text" id="version-text">v1.1.0</span>
         </div>
       </aside>
 
@@ -127,20 +127,32 @@
           </header>
           <div class="segmented full engine-tabs">
             <button type="button" id="engine-groq" class="segment active">Groq Cloud</button>
-            <button type="button" id="engine-openai" class="segment" data-i18n="engine.openai">OpenAI Compatible</button>
             <button type="button" id="engine-polza" class="segment">Polza</button>
             <button type="button" id="engine-assemblyai" class="segment">AssemblyAI</button>
+            <button type="button" id="engine-openai" class="segment" data-i18n="engine.openai">OpenAI Compatible</button>
           </div>
           <div class="card">
             <!-- Groq Settings -->
             <div id="groq-settings">
               <div class="setting-row">
                 <div class="setting-label">
-                  <span class="label-text" data-i18n="engine.groqKey">Groq API Key</span>
+                  <span class="label-text" data-i18n="engine.apiKey">API Key</span>
                   <span class="label-hint" data-i18n="engine.groqKeyHint">Get your key from console.groq.com</span>
                 </div>
                 <div class="setting-control">
                   <input type="password" id="groq-key" placeholder="gsk_..." />
+                </div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text" data-i18n="engine.model">Model</span>
+                  <span class="label-hint" data-i18n="engine.modelHint">Speech recognition model</span>
+                </div>
+                <div class="setting-control">
+                  <select id="groq-model">
+                    <option value="whisper-large-v3-turbo">Whisper Large v3 Turbo</option>
+                    <option value="whisper-large-v3">Whisper Large v3</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -221,14 +233,13 @@
               <div class="setting-row">
                 <div class="setting-label">
                   <span class="label-text" data-i18n="engine.model">Model</span>
-                  <span class="label-hint" data-i18n="engine.assemblyaiModelHint">Speech recognition model</span>
+                  <span class="label-hint" data-i18n="engine.modelHint">Speech recognition model</span>
                 </div>
-                <div class="setting-control stacked">
+                <div class="setting-control">
                   <select id="assemblyai-model">
                     <option value="universal-3-5-pro">Universal-3.5 Pro</option>
                     <option value="universal-2">Universal-2</option>
                   </select>
-                  <span id="assemblyai-model-note" class="control-note" data-i18n="engine.noRussian">Doesn't support Russian</span>
                 </div>
               </div>
             </div>
@@ -262,6 +273,18 @@
                 <button type="button" id="hotkey-btn" class="hotkey-record-btn" title="Click to change shortcut" data-i18n-title="recording.hotkeyChange">
                   <kbd id="hotkey-text">Ctrl+Shift+Space</kbd>
                 </button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-label">
+                <label class="label-text" for="append-space-toggle" data-i18n="recording.appendSpace">Space after text</label>
+                <span class="label-hint" data-i18n="recording.appendSpaceHint">Adds a space after the pasted text, so the next phrase doesn't stick to it</span>
+              </div>
+              <div class="setting-control">
+                <label class="switch">
+                  <input type="checkbox" id="append-space-toggle" role="switch" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
               </div>
             </div>
           </div>
