@@ -1,6 +1,6 @@
 # AGENTS.md — Typr
 
-Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Rust backend) and vanilla TypeScript frontend. It records audio via a global hotkey, transcribes it using Groq or OpenAI Whisper, and auto-pastes the result into the active window.
+Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Rust backend) and vanilla TypeScript frontend. It records audio via a global hotkey, transcribes it using Groq, OpenAI (or any OpenAI-compatible API), Polza.AI or AssemblyAI, and auto-pastes the result into the active window. The interface is in English and Russian.
 
 ---
 
@@ -10,6 +10,7 @@ Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Ru
 typr/
 ├── src/                        # TypeScript frontend (Vite)
 │   ├── main.ts                 # Main UI logic, settings form, hotkey binding
+│   ├── i18n.ts                 # English/Russian UI strings, t(), data-i18n attributes
 │   ├── overlay.html            # Mic indicator overlay (WebView fallback for non-Windows)
 │   └── style.css               # Global styles
 ├── src-tauri/                  # Rust backend (Tauri)
@@ -21,6 +22,9 @@ typr/
 │       ├── transcribe_groq.rs  # Groq Whisper API client
 │       ├── transcribe_openai.rs# OpenAI / OpenAI-compatible API client
 │       ├── transcribe_polza.rs # Polza.AI client (JSON body, base64 data URL)
+│       ├── transcribe_assemblyai.rs # AssemblyAI client (upload → transcript job → poll)
+│       ├── keyboard.rs         # Hotkey must be pressed on its own (GetAsyncKeyState check)
+│       ├── i18n.rs             # System language detection, tray menu strings
 │       ├── net.rs              # Shared HTTP client (timeouts) + response/error helpers
 │       ├── logger.rs           # `log` backend feeding the Developer section
 │       ├── overlay.rs          # Recording indicator that slides in while dictating (native layered window on Windows)
@@ -50,8 +54,10 @@ Manages the `RecordingState` state machine (`Ready → Recording → Transcribin
 
 ### `settings.rs` — Configuration
 Persisted to `config.json` in the Tauri app data directory. Key fields:
-- `engine`: `"groq"` | `"openai"` | `"openai-compatible"` | `"polza"` (default: `"groq"`)
-- `groqApiKey`, `openaiApiKey`, `openaiEndpoint`, `openaiModel`, `polzaApiKey`, `polzaModel`, `polzaProvider`
+- `engine`: `"groq"` | `"openai"` | `"openai-compatible"` | `"polza"` | `"assemblyai"` (default: `"groq"`)
+- `groqApiKey`, `openaiApiKey`, `openaiEndpoint`, `openaiModel`, `polzaApiKey`, `polzaModel`, `polzaProvider`, `assemblyaiApiKey`
+- `assemblyaiModel`: `"universal-3-5-pro"` (default, no Russian) | `"universal-2"`
+- `language`: `"en"` | `"ru"` | `""` (empty follows the system, see `i18n.rs`)
 - `developerMode`: shows the Developer section and turns log collection on
 - `microphone`: device name or `"default"`
 - `recordingMode`: `"toggle"` | `"push-to-talk"`
@@ -62,6 +68,15 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 
 ### `transcribe_groq.rs` / `transcribe_openai.rs`
 Both send a multipart form POST with the WAV file to the respective API. `transcribe_openai.rs` is also used for any OpenAI-compatible endpoint (e.g. local Whisper servers) via the configurable `openaiEndpoint`.
+
+### `transcribe_assemblyai.rs`
+Three steps: `POST /v2/upload` with the raw WAV, `POST /v2/transcript` with `speech_models: [model]` and `language_detection: true`, then poll `GET /v2/transcript/{id}` until `completed` or `error`. Universal-3.5 Pro supports 18 languages without Russian; the UI shows a note while it is selected.
+
+### `keyboard.rs` — hotkey pressed on its own
+On `ShortcutState::Pressed` with the recorder `Ready`, `HotkeyKeys::extra_keys_held()` reads every key and mouse button via `GetAsyncKeyState`; if anything besides the hotkey's own keys is down, the press is ignored (logged). Stopping a recording is never blocked.
+
+### Localization
+`src/i18n.ts` holds the English and Russian strings. Static markup uses `data-i18n` (text), `data-i18n-placeholder` and `data-i18n-title`; code uses `t(key)`. New UI text must get keys in both dictionaries. The `language` setting picks the language; when empty, `get_system_language` (Rust, `sys-locale`) decides: Russian for ru, uk, be, kk, ky, tg, uz, tk, hy, az, English otherwise. The tray menu is translated in `i18n.rs`. Backend error messages and logs stay in English. The page is hidden (`.i18n-pending`) until the language is applied.
 
 ### `cleanup.rs`
 Strips common transcription artifacts (leading/trailing filler, repeated punctuation, etc.) before the text is pasted.

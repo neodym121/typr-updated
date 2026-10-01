@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -11,6 +11,8 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use typr_lib::audio;
+use typr_lib::i18n;
+use typr_lib::keyboard::HotkeyKeys;
 use typr_lib::logger::{self, LogEntry};
 use typr_lib::overlay::{self, Placement};
 use typr_lib::recorder::{self, Recorder, RecordingState};
@@ -26,15 +28,24 @@ struct AppState {
     hotkey_enabled: AtomicBool,
 }
 
+/// Tray menu items whose text follows the interface language and the hotkey switch
+struct TrayMenu {
+    hotkey: CheckMenuItem<tauri::Wry>,
+    exit: MenuItem<tauri::Wry>,
+}
+
 /// Set while the main window is being re-created, so two quick tray clicks
 /// don't try to build it twice
 static OPENING_MAIN_WINDOW: AtomicBool = AtomicBool::new(false);
 
-fn hotkey_menu_text(enabled: bool) -> &'static str {
-    if enabled {
-        "Hotkey: On"
-    } else {
-        "Hotkey: Off"
+fn update_tray_menu(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let language = i18n::resolve(&state.settings.lock().unwrap().language);
+    let enabled = state.hotkey_enabled.load(Ordering::SeqCst);
+    if let Some(tray) = app.try_state::<TrayMenu>() {
+        let _ = tray.hotkey.set_text(i18n::tray_hotkey(language, enabled));
+        let _ = tray.hotkey.set_checked(enabled);
+        let _ = tray.exit.set_text(i18n::tray_exit(language));
     }
 }
 
@@ -120,6 +131,7 @@ fn set_hotkey_enabled(app: &tauri::AppHandle, enabled: bool) {
     }
 
     sync_overlay(app);
+    update_tray_menu(app);
     if let Err(e) = app.emit("hotkey-enabled", enabled) {
         log::debug!("Failed to emit hotkey-enabled: {}", e);
     }
@@ -173,9 +185,13 @@ fn save_settings(
     }
 
     let indicator_changed = settings.show_indicator != old.show_indicator;
+    let language_changed = settings.language != old.language;
     *state.settings.lock().unwrap() = settings;
     if indicator_changed {
         sync_overlay(&app);
+    }
+    if language_changed {
+        update_tray_menu(&app);
     }
     Ok(())
 }
@@ -210,6 +226,13 @@ async fn toggle_recording(
 #[tauri::command]
 fn get_hotkey_enabled(state: State<AppState>) -> bool {
     state.hotkey_enabled.load(Ordering::SeqCst)
+}
+
+/// Interface language that suits the system ("en" or "ru"), used while
+/// no language is chosen in General
+#[tauri::command]
+fn get_system_language() -> String {
+    i18n::system_language().to_string()
 }
 
 #[tauri::command]
@@ -345,6 +368,7 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), Strin
     }
 
     log::info!("Registering global shortcut: {}", normalized);
+    let hotkey_keys = HotkeyKeys::parse(&normalized);
 
     app.global_shortcut().on_shortcut(normalized.as_str(), move |_app, shortcut, event| {
         let handle = handle.clone();
@@ -355,6 +379,19 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), Strin
         match event.state {
             ShortcutState::Pressed => {
                 log::debug!("Hotkey pressed: {:?} (mode: {})", shortcut, mode);
+                // A dictation starts only when nothing but the hotkey is held,
+                // so pressing it by accident along with other keys (e.g. W
+                // while gaming) does nothing. Stopping is never blocked.
+                if state.recorder.get_state() == RecordingState::Ready {
+                    let extra = hotkey_keys.extra_keys_held();
+                    if !extra.is_empty() {
+                        log::info!(
+                            "Hotkey ignored: other keys are held too ({})",
+                            extra.join(", ")
+                        );
+                        return;
+                    }
+                }
                 if push_to_talk {
                     state.ptt_held.store(true, Ordering::SeqCst);
                 }
@@ -418,6 +455,7 @@ fn main() {
             get_recording_state,
             toggle_recording,
             get_hotkey_enabled,
+            get_system_language,
             get_logs,
             clear_logs,
             frontend_log,
@@ -433,19 +471,29 @@ fn main() {
             logger::attach_app(app.handle().clone());
             log_environment(&startup_dir, &startup_settings);
 
-            // System tray: hotkey on/off switch and Exit
-            let hotkey_item = Arc::new(CheckMenuItem::with_id(
+            // System tray: hotkey on/off switch and Exit, in the interface language
+            let language = i18n::resolve(&startup_settings.language);
+            let hotkey_item = CheckMenuItem::with_id(
                 app,
                 "toggle-hotkey",
-                hotkey_menu_text(true),
+                i18n::tray_hotkey(language, true),
                 true,
                 true,
                 None::<&str>,
-            )?);
+            )?;
             let separator = PredefinedMenuItem::separator(app)?;
-            let quit_i = MenuItem::with_id(app, "exit", "Exit", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&*hotkey_item, &separator, &quit_i])?;
-            let menu_hotkey_item = hotkey_item.clone();
+            let quit_i = MenuItem::with_id(
+                app,
+                "exit",
+                i18n::tray_exit(language),
+                true,
+                None::<&str>,
+            )?;
+            let tray_menu = Menu::with_items(app, &[&hotkey_item, &separator, &quit_i])?;
+            app.manage(TrayMenu {
+                hotkey: hotkey_item.clone(),
+                exit: quit_i.clone(),
+            });
 
             let tray_icon = match app.default_window_icon() {
                 Some(i) => i.clone(),
@@ -465,7 +513,7 @@ fn main() {
                         }
                     }
                 })
-                .on_menu_event(move |app, event| match event.id.as_ref() {
+                .on_menu_event(|app, event| match event.id.as_ref() {
                     "exit" => {
                         log::info!("Tray Exit clicked, terminating application");
                         app.exit(0);
@@ -473,8 +521,6 @@ fn main() {
                     "toggle-hotkey" => {
                         let enabled = !app.state::<AppState>().hotkey_enabled.load(Ordering::SeqCst);
                         set_hotkey_enabled(app, enabled);
-                        let _ = menu_hotkey_item.set_checked(enabled);
-                        let _ = menu_hotkey_item.set_text(hotkey_menu_text(enabled));
                     }
                     _ => {}
                 })

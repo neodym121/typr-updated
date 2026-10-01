@@ -8,6 +8,7 @@ use crate::cleanup::cleanup_text;
 use crate::overlay::{self, Indicator};
 use crate::paste::paste_text;
 use crate::settings::Settings;
+use crate::transcribe_assemblyai;
 use crate::transcribe_groq;
 use crate::transcribe_openai;
 use crate::transcribe_polza;
@@ -209,6 +210,14 @@ async fn transcribe(settings: &Settings, audio_path: &PathBuf) -> Result<String,
                 &settings.polza_api_key,
                 &settings.polza_model,
                 &settings.polza_provider,
+                audio_path,
+            )
+            .await
+        }
+        "assemblyai" => {
+            transcribe_assemblyai::transcribe_assemblyai(
+                &settings.assemblyai_api_key,
+                &settings.assemblyai_model,
                 audio_path,
             )
             .await

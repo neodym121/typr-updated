@@ -1,6 +1,6 @@
 [package]
 name = "typr"
-version = "1.0.4"
+version = "1.0.5"
 description = "A dictation app powered by Whisper"
 authors = ["you"]
 edition = "2021"
@@ -27,12 +27,15 @@ dirs = "6"
 arboard = "3"
 log = "0.4"
 base64 = "0.22"
+sys-locale = "0.3"
 
-# Native recording overlay (layered window drawn without a WebView)
+# Native recording overlay (layered window drawn without a WebView) and
+# the keyboard state check for the hotkey
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
+  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }

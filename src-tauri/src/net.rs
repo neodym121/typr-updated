@@ -42,18 +42,36 @@ pub async fn read_transcription(
     response: reqwest::Response,
     started: Instant,
 ) -> Result<String, String> {
+    log::info!(
+        "{} responded {} in {} ms",
+        provider,
+        response.status(),
+        started.elapsed().as_millis()
+    );
+
+    let json = read_json(provider, response).await?;
+    json["text"]
+        .as_str()
+        .map(|text| text.to_string())
+        .ok_or_else(|| {
+            format!(
+                "No 'text' field in {} response: {}",
+                provider,
+                shorten(&json.to_string(), 300)
+            )
+        })
+}
+
+/// Reads a JSON response body; an HTTP error status becomes a readable error.
+pub async fn read_json(
+    provider: &str,
+    response: reqwest::Response,
+) -> Result<serde_json::Value, String> {
     let status = response.status();
     let body = response
         .text()
         .await
         .map_err(|e| format!("{} response could not be read: {}", provider, describe_error(&e)))?;
-
-    log::info!(
-        "{} responded {} in {} ms",
-        provider,
-        status,
-        started.elapsed().as_millis()
-    );
 
     if !status.is_success() {
         return Err(format!(
@@ -64,25 +82,14 @@ pub async fn read_transcription(
         ));
     }
 
-    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+    serde_json::from_str(&body).map_err(|e| {
         format!(
             "Failed to parse {} response: {} (body: {})",
             provider,
             e,
             shorten(&body, 300)
         )
-    })?;
-
-    json["text"]
-        .as_str()
-        .map(|text| text.to_string())
-        .ok_or_else(|| {
-            format!(
-                "No 'text' field in {} response: {}",
-                provider,
-                shorten(&body, 300)
-            )
-        })
+    })
 }
 
 fn shorten(text: &str, max_chars: usize) -> String {

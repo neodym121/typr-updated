@@ -439,6 +439,19 @@ button {
   justify-content: flex-end;
 }
 
+/* A control with a small note under it */
+.setting-control.stacked {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.control-note {
+  font-size: var(--text-caption);
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
 /* ── Form Controls ──────────────────────────────────── */
 
 select,
@@ -853,6 +866,11 @@ input.log-search {
   display: none !important;
 }
 
+/* Until the interface language is applied, so the window never flashes English */
+.i18n-pending #app {
+  visibility: hidden;
+}
+
 /* ── Scrollbars ─────────────────────────────────────── */
 
 ::-webkit-scrollbar {
@@ -902,5 +920,14 @@ input.log-search {
 
   .setting-control {
     flex: 1 1 220px;
+  }
+
+  /* Longer Russian labels still fit the engine tabs and log levels */
+  .segment {
+    padding: 0 8px;
+  }
+
+  .log-toolbar .segment {
+    padding: 0 6px;
   }
 }

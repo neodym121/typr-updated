@@ -18,6 +18,10 @@ fn default_polza_model() -> String {
     "openai/whisper-large-v3".to_string()
 }
 
+fn default_assemblyai_model() -> String {
+    "universal-3-5-pro".to_string()
+}
+
 fn default_recording_mode() -> String {
     "toggle".to_string()
 }
@@ -49,6 +53,11 @@ pub struct Settings {
     pub polza_model: String,
     #[serde(rename = "polzaProvider", default)]
     pub polza_provider: String,
+    #[serde(rename = "assemblyaiApiKey", default)]
+    pub assemblyai_api_key: String,
+    /// "universal-3-5-pro" (no Russian) or "universal-2"
+    #[serde(rename = "assemblyaiModel", default = "default_assemblyai_model")]
+    pub assemblyai_model: String,
     #[serde(rename = "recordingMode", default = "default_recording_mode")]
     pub recording_mode: String,
     #[serde(default = "default_hotkey")]
@@ -56,6 +65,9 @@ pub struct Settings {
     /// Recording indicator that slides in at the top of the screen while dictating
     #[serde(rename = "showIndicator", default = "default_true")]
     pub show_indicator: bool,
+    /// Interface language: "en", "ru", or empty to follow the system
+    #[serde(default)]
+    pub language: String,
     /// Shows the Developer section and turns on log collection
     #[serde(rename = "developerMode", default)]
     pub developer_mode: bool,
@@ -73,9 +85,12 @@ impl Default for Settings {
             polza_api_key: String::new(),
             polza_model: "openai/whisper-large-v3".to_string(),
             polza_provider: String::new(),
+            assemblyai_api_key: String::new(),
+            assemblyai_model: "universal-3-5-pro".to_string(),
             recording_mode: "toggle".to_string(),
             hotkey: "Ctrl+Shift+Space".to_string(),
             show_indicator: true,
+            language: String::new(),
             developer_mode: false,
         }
     }
@@ -118,7 +133,7 @@ impl Settings {
     /// only whether they are set.
     pub fn summary(&self) -> String {
         format!(
-            "engine={}, mode={}, hotkey={}, mic='{}', groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, showIndicator={}, developerMode={}",
+            "engine={}, mode={}, hotkey={}, mic='{}', groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, assemblyaiModel={}, assemblyaiKey={}, showIndicator={}, language={}, developerMode={}",
             self.engine,
             self.recording_mode,
             self.hotkey,
@@ -130,7 +145,10 @@ impl Settings {
             self.polza_model,
             if self.polza_provider.is_empty() { "auto" } else { self.polza_provider.as_str() },
             key_state(&self.polza_api_key),
+            self.assemblyai_model,
+            key_state(&self.assemblyai_api_key),
             self.show_indicator,
+            if self.language.is_empty() { "system" } else { self.language.as_str() },
             self.developer_mode
         )
     }
@@ -148,6 +166,8 @@ impl Settings {
             ("openaiModel", &old.openai_model, &self.openai_model),
             ("polzaModel", &old.polza_model, &self.polza_model),
             ("polzaProvider", &old.polza_provider, &self.polza_provider),
+            ("assemblyaiModel", &old.assemblyai_model, &self.assemblyai_model),
+            ("language", &old.language, &self.language),
         ];
         for (name, before, after) in plain {
             if before != after {
@@ -159,6 +179,7 @@ impl Settings {
             ("groqApiKey", &old.groq_api_key, &self.groq_api_key),
             ("openaiApiKey", &old.openai_api_key, &self.openai_api_key),
             ("polzaApiKey", &old.polza_api_key, &self.polza_api_key),
+            ("assemblyaiApiKey", &old.assemblyai_api_key, &self.assemblyai_api_key),
         ];
         for (name, before, after) in secret {
             if before != after {
@@ -201,6 +222,9 @@ mod tests {
         assert_eq!(settings.polza_api_key, "");
         assert_eq!(settings.polza_model, "openai/whisper-large-v3");
         assert_eq!(settings.polza_provider, "");
+        assert_eq!(settings.assemblyai_api_key, "");
+        assert_eq!(settings.assemblyai_model, "universal-3-5-pro");
+        assert_eq!(settings.language, "");
         assert_eq!(settings.recording_mode, "toggle");
         assert_eq!(settings.hotkey, "Ctrl+Shift+Space");
         assert!(settings.show_indicator);
@@ -212,12 +236,16 @@ mod tests {
         let old = Settings::default();
         let mut new = Settings::default();
         new.groq_api_key = "gsk_secret".to_string();
+        new.assemblyai_api_key = "aai_secret".to_string();
         new.engine = "polza".to_string();
 
         let summary = new.summary();
         let changes = new.describe_changes(&old).join("; ");
         assert!(!summary.contains("gsk_secret"));
         assert!(!changes.contains("gsk_secret"));
+        assert!(!summary.contains("aai_secret"));
+        assert!(!changes.contains("aai_secret"));
+        assert!(changes.contains("assemblyaiApiKey updated (set)"));
         assert!(changes.contains("engine: 'groq' → 'polza'"));
         assert!(changes.contains("groqApiKey updated (set)"));
     }

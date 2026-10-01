@@ -2,6 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getLanguage, setLanguage, t, type Lang, type MessageKey } from "./i18n";
 
 interface Settings {
   microphone: string;
@@ -13,9 +14,13 @@ interface Settings {
   polzaApiKey: string;
   polzaModel: string;
   polzaProvider: string;
+  assemblyaiApiKey: string;
+  assemblyaiModel: string;
   recordingMode: string;
   hotkey: string;
   showIndicator: boolean;
+  /** "en", "ru", or empty to follow the system */
+  language: string;
   developerMode: boolean;
 }
 
@@ -98,9 +103,11 @@ const indicatorToggle = document.getElementById("indicator-toggle") as HTMLInput
 const engineGroq = document.getElementById("engine-groq")!;
 const engineOpenai = document.getElementById("engine-openai")!;
 const enginePolza = document.getElementById("engine-polza")!;
+const engineAssemblyai = document.getElementById("engine-assemblyai")!;
 const groqSettings = document.getElementById("groq-settings")!;
 const openaiSettings = document.getElementById("openai-settings")!;
 const polzaSettings = document.getElementById("polza-settings")!;
+const assemblyaiSettings = document.getElementById("assemblyai-settings")!;
 const groqKey = document.getElementById("groq-key") as HTMLInputElement;
 const openaiEndpoint = document.getElementById("openai-endpoint") as HTMLInputElement;
 const openaiModel = document.getElementById("openai-model") as HTMLInputElement;
@@ -108,6 +115,10 @@ const openaiKey = document.getElementById("openai-key") as HTMLInputElement;
 const polzaKey = document.getElementById("polza-key") as HTMLInputElement;
 const polzaModel = document.getElementById("polza-model") as HTMLInputElement;
 const polzaProvider = document.getElementById("polza-provider") as HTMLInputElement;
+const assemblyaiKey = document.getElementById("assemblyai-key") as HTMLInputElement;
+const assemblyaiModel = document.getElementById("assemblyai-model") as HTMLSelectElement;
+const assemblyaiModelNote = document.getElementById("assemblyai-model-note")!;
+const languageButtons = document.querySelectorAll<HTMLButtonElement>("#language-select .segment");
 const modeToggle = document.getElementById("mode-toggle")!;
 const modePtt = document.getElementById("mode-ptt")!;
 const hotkeyBtn = document.getElementById("hotkey-btn")!;
@@ -165,6 +176,32 @@ sidebar.addEventListener("mousedown", (e) => {
 });
 
 let currentSettings: Settings;
+let microphones: MicDevice[] = [];
+let microphonesLoaded = false;
+let systemLanguage: Lang = "en";
+
+const ASSEMBLYAI_MODELS = ["universal-3-5-pro", "universal-2"];
+const ASSEMBLYAI_PRO = "universal-3-5-pro";
+
+// The window stays hidden until its language is known (see .i18n-pending);
+// the timeout makes sure a failed startup never leaves it blank
+function revealInterface() {
+  document.documentElement.classList.remove("i18n-pending");
+}
+window.setTimeout(revealInterface, 1500);
+
+function resolveLanguage(choice: string): Lang {
+  return choice === "en" || choice === "ru" ? choice : systemLanguage;
+}
+
+function applyLanguage(lang: Lang) {
+  setLanguage(lang);
+  languageButtons.forEach((b) => b.classList.toggle("active", b.dataset.lang === lang));
+  // Texts set from code
+  renderStatus();
+  renderMicOptions();
+  updateLogMeta();
+}
 
 function formatKeyForDisplay(key: string): string {
   const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
@@ -185,27 +222,46 @@ function displayHotkey(hotkeyStr: string) {
   hotkeyText.textContent = formatted.join("+");
 }
 
+// Mic dropdown: the system default first, then every input device
+function renderMicOptions() {
+  if (!microphonesLoaded) return;
+  const selected = micSelect.value || currentSettings.microphone || "default";
+  micSelect.innerHTML = "";
+  const systemDefault = microphones.find((mic) => mic.is_default);
+  micSelect.appendChild(
+    new Option(
+      systemDefault ? t("general.systemDefaultNamed", { name: systemDefault.name }) : t("general.systemDefault"),
+      "default",
+    ),
+  );
+  microphones.forEach((mic) => micSelect.appendChild(new Option(mic.name, mic.name)));
+  if (selected !== "default" && !microphones.some((mic) => mic.name === selected)) {
+    micSelect.appendChild(new Option(t("general.notConnected", { name: selected }), selected));
+  }
+  micSelect.value = selected;
+}
+
 async function loadSettings() {
   currentSettings = await invoke<Settings>("get_settings");
+  systemLanguage = await invoke<string>("get_system_language")
+    .then((lang): Lang => (lang === "ru" ? "ru" : "en"))
+    .catch((): Lang => "en");
+  applyLanguage(resolveLanguage(currentSettings.language || ""));
+  revealInterface();
+
   applyDeveloperMode(Boolean(currentSettings.developerMode));
   if (developerMode) {
     await loadLogs();
   }
 
-  // Populate mic dropdown: the system default first, then every input device
-  const mics = await invoke<MicDevice[]>("list_microphones");
-  micSelect.innerHTML = "";
-  const systemDefault = mics.find((mic) => mic.is_default);
-  micSelect.appendChild(
-    new Option(systemDefault ? `System default (${systemDefault.name})` : "System default", "default"),
-  );
-  mics.forEach((mic) => micSelect.appendChild(new Option(mic.name, mic.name)));
+  microphones = await invoke<MicDevice[]>("list_microphones");
+  microphonesLoaded = true;
   const savedMic = currentSettings.microphone || "default";
-  if (savedMic !== "default" && !mics.some((mic) => mic.name === savedMic)) {
-    micSelect.appendChild(new Option(`${savedMic} (not connected)`, savedMic));
+  micSelect.value = "";
+  renderMicOptions();
+  if (savedMic !== "default" && !microphones.some((mic) => mic.name === savedMic)) {
     uiLog("warn", `Saved microphone "${savedMic}" is not connected, the system default will be used`);
   }
-  micSelect.value = savedMic;
 
   // Recording indicator (on unless switched off)
   indicatorToggle.checked = currentSettings.showIndicator !== false;
@@ -226,13 +282,17 @@ async function loadSettings() {
   polzaModel.value = currentSettings.polzaModel || "openai/whisper-large-v3";
   polzaProvider.value = currentSettings.polzaProvider || "";
 
+  // AssemblyAI settings
+  assemblyaiKey.value = currentSettings.assemblyaiApiKey || "";
+  setAssemblyaiModel(currentSettings.assemblyaiModel || ASSEMBLYAI_PRO);
+
   // Recording mode
   setRecordingMode(currentSettings.recordingMode || "toggle");
 
   // Hotkey
   displayHotkey(currentSettings.hotkey);
 
-  uiLog("debug", `Settings loaded, ${mics.length} microphone(s) available`);
+  uiLog("debug", `Settings loaded, ${microphones.length} microphone(s) available`);
 }
 
 function setEngine(engine: string) {
@@ -240,9 +300,21 @@ function setEngine(engine: string) {
   engineGroq.classList.toggle("active", engine === "groq");
   engineOpenai.classList.toggle("active", engine === "openai");
   enginePolza.classList.toggle("active", engine === "polza");
+  engineAssemblyai.classList.toggle("active", engine === "assemblyai");
   groqSettings.classList.toggle("hidden", engine !== "groq");
   openaiSettings.classList.toggle("hidden", engine !== "openai");
   polzaSettings.classList.toggle("hidden", engine !== "polza");
+  assemblyaiSettings.classList.toggle("hidden", engine !== "assemblyai");
+}
+
+// Universal-3.5 Pro has no Russian, a quiet note says so while it's selected
+function setAssemblyaiModel(model: string) {
+  assemblyaiModel.value = ASSEMBLYAI_MODELS.includes(model) ? model : ASSEMBLYAI_PRO;
+  updateAssemblyaiNote();
+}
+
+function updateAssemblyaiNote() {
+  assemblyaiModelNote.classList.toggle("hidden", assemblyaiModel.value !== ASSEMBLYAI_PRO);
 }
 
 function setRecordingMode(mode: string) {
@@ -261,6 +333,8 @@ async function saveSettings() {
   currentSettings.polzaApiKey = polzaKey.value.trim();
   currentSettings.polzaModel = polzaModel.value.trim();
   currentSettings.polzaProvider = polzaProvider.value.trim();
+  currentSettings.assemblyaiApiKey = assemblyaiKey.value.trim();
+  currentSettings.assemblyaiModel = assemblyaiModel.value;
   currentSettings.developerMode = devModeToggle.checked;
   try {
     await invoke("save_settings", { settings: currentSettings });
@@ -292,6 +366,11 @@ enginePolza.addEventListener("click", () => {
   saveQuietly();
 });
 
+engineAssemblyai.addEventListener("click", () => {
+  setEngine("assemblyai");
+  saveQuietly();
+});
+
 micSelect.addEventListener("change", () => saveQuietly());
 indicatorToggle.addEventListener("change", () => saveQuietly());
 groqKey.addEventListener("change", () => saveQuietly());
@@ -301,6 +380,21 @@ openaiKey.addEventListener("change", () => saveQuietly());
 polzaKey.addEventListener("change", () => saveQuietly());
 polzaModel.addEventListener("change", () => saveQuietly());
 polzaProvider.addEventListener("change", () => saveQuietly());
+assemblyaiKey.addEventListener("change", () => saveQuietly());
+assemblyaiModel.addEventListener("change", () => {
+  updateAssemblyaiNote();
+  saveQuietly();
+});
+
+languageButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const lang: Lang = button.dataset.lang === "ru" ? "ru" : "en";
+    if (currentSettings.language === lang && getLanguage() === lang) return;
+    currentSettings.language = lang;
+    applyLanguage(lang);
+    saveQuietly();
+  });
+});
 
 modeToggle.addEventListener("click", () => {
   setRecordingMode("toggle");
@@ -422,11 +516,11 @@ function updateLogMeta() {
   logEmpty.classList.toggle("hidden", hasRows);
   if (!hasRows) {
     if (total === 0) {
-      logEmptyTitle.textContent = "No logs yet";
-      logEmptyHint.textContent = "Press your hotkey and dictate something. Every step will show up here.";
+      logEmptyTitle.textContent = t("developer.empty");
+      logEmptyHint.textContent = t("developer.emptyHint");
     } else {
-      logEmptyTitle.textContent = "Nothing matches";
-      logEmptyHint.textContent = "Try another level or clear the text filter.";
+      logEmptyTitle.textContent = t("developer.noMatch");
+      logEmptyHint.textContent = t("developer.noMatchHint");
     }
   }
 }
@@ -558,23 +652,25 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+// Shows `text` on a button for a moment, then its usual (translated) label
 function flashButton(button: HTMLElement, text: string) {
-  const original = button.dataset.label || button.textContent || "";
-  button.dataset.label = original;
   button.textContent = text;
-  window.setTimeout(() => {
-    button.textContent = original;
-  }, 1200);
+  window.clearTimeout(Number(button.dataset.flashTimer));
+  button.dataset.flashTimer = String(
+    window.setTimeout(() => {
+      button.textContent = t(button.dataset.i18n as MessageKey);
+    }, 1200),
+  );
 }
 
 logCopy.addEventListener("click", async () => {
   const lines = logEntries.filter(matchesFilter).map(formatEntryLine);
   if (lines.length === 0) {
-    flashButton(logCopy, "Nothing to copy");
+    flashButton(logCopy, t("developer.nothingToCopy"));
     return;
   }
   const ok = await copyText(lines.join("\n"));
-  flashButton(logCopy, ok ? `Copied ${lines.length}` : "Copy failed");
+  flashButton(logCopy, ok ? t("developer.copied", { count: lines.length }) : t("developer.copyFailed"));
 });
 
 logClear.addEventListener("click", async () => {
@@ -600,8 +696,8 @@ function startHotkeyRecording() {
   const strokeKeys = new Set<string>();
 
   hotkeyBtn.classList.add("recording");
-  hotkeyText.textContent = "Press 2–3 keys...";
-  hotkeyHint.textContent = "Hold 2 or 3 keys simultaneously, then release";
+  hotkeyText.textContent = t("recording.pressKeys");
+  hotkeyHint.textContent = t("recording.pressKeysHint");
 
   const getKeyIdentifier = (e: KeyboardEvent): string => {
     if (e.key === "Control") return "Ctrl";
@@ -665,7 +761,7 @@ function startHotkeyRecording() {
         })
         .catch(() => {
           currentSettings.hotkey = previousHotkey;
-          hotkeyText.textContent = "Error saving";
+          hotkeyText.textContent = t("recording.saveError");
           setTimeout(() => cleanup(), 1200);
         });
       return;
@@ -676,10 +772,10 @@ function startHotkeyRecording() {
 
     if (pressedKeys.size === 0) {
       strokeKeys.clear();
-      hotkeyText.textContent = "Need 2 or 3 keys!";
+      hotkeyText.textContent = t("recording.needKeys");
       setTimeout(() => {
         if (isRecordingHotkey && pressedKeys.size === 0) {
-          hotkeyText.textContent = "Press 2–3 keys...";
+          hotkeyText.textContent = t("recording.pressKeys");
         }
       }, 1000);
     }
@@ -697,7 +793,7 @@ function startHotkeyRecording() {
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("keyup", onKeyUp, true);
     window.removeEventListener("mousedown", onOutsideClick, true);
-    hotkeyHint.textContent = "Global keyboard shortcut to trigger recording";
+    hotkeyHint.textContent = t("recording.hotkeyHint");
     displayHotkey(currentSettings.hotkey);
   };
 
@@ -716,9 +812,26 @@ type StatusState = "ready" | "recording" | "transcribing" | "error" | "paused";
 let statusResetTimer: number | undefined;
 let hotkeyEnabled = true;
 
-function setStatus(state: StatusState, text: string, detail = "") {
-  statusIndicator.dataset.state = state;
-  statusText.textContent = text;
+interface StatusView {
+  state: StatusState;
+  text: MessageKey;
+  /** Translated detail line */
+  detail?: MessageKey;
+  /** Detail shown as is (error messages from the backend) */
+  rawDetail?: string;
+}
+
+let statusView: StatusView = { state: "ready", text: "status.ready" };
+
+function setStatus(view: StatusView) {
+  statusView = view;
+  renderStatus();
+}
+
+function renderStatus() {
+  const detail = statusView.detail ? t(statusView.detail) : statusView.rawDetail || "";
+  statusIndicator.dataset.state = statusView.state;
+  statusText.textContent = t(statusView.text);
   statusDetail.textContent = detail;
   statusDetail.classList.toggle("hidden", !detail);
   statusIndicator.title = detail;
@@ -727,18 +840,18 @@ function setStatus(state: StatusState, text: string, detail = "") {
 // Idle status: "Ready", or "Hotkey off" while the tray switch is off
 function setIdleStatus() {
   if (hotkeyEnabled) {
-    setStatus("ready", "Ready");
+    setStatus({ state: "ready", text: "status.ready" });
   } else {
-    setStatus("paused", "Hotkey off", "Turn it back on from the tray menu");
+    setStatus({ state: "paused", text: "status.hotkeyOff", detail: "status.hotkeyOffHint" });
   }
 }
 
 function applyRecordingState(state: string) {
   if (state === "Recording") {
     window.clearTimeout(statusResetTimer);
-    setStatus("recording", "Recording…");
+    setStatus({ state: "recording", text: "status.recording" });
   } else if (state === "Transcribing") {
-    setStatus("transcribing", "Transcribing…");
+    setStatus({ state: "transcribing", text: "status.transcribing" });
   } else if (statusIndicator.dataset.state !== "error") {
     setIdleStatus();
   }
@@ -759,7 +872,7 @@ listen<boolean>("hotkey-enabled", (event) => applyHotkeyEnabled(event.payload));
 
 listen<string>("recording-error", (event) => {
   window.clearTimeout(statusResetTimer);
-  setStatus("error", "Error", event.payload);
+  setStatus({ state: "error", text: "status.error", rawDetail: event.payload });
   statusResetTimer = window.setTimeout(setIdleStatus, 12000);
 });
 
@@ -782,6 +895,7 @@ invoke<boolean>("get_hotkey_enabled")
   );
 
 loadSettings().catch((err) => {
+  revealInterface();
   nativeConsole.error("Failed to load settings:", err);
   uiLog("error", "Failed to load settings:", err);
 });
