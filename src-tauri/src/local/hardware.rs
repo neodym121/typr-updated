@@ -2,11 +2,9 @@
 //! the runtime: the display adapters from the registry plus the Vulkan
 //! loader (vulkan-1.dll) that GPU drivers install.
 
-use serde::Serialize;
-
 use super::catalog::Backend;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Gpu {
     pub name: String,
     /// Dedicated memory in bytes, 0 when the driver doesn't report it
@@ -15,8 +13,6 @@ pub struct Gpu {
 
 #[derive(Debug, Clone, Default)]
 pub struct Hardware {
-    /// Most dedicated memory first, so a discrete GPU comes before an
-    /// integrated one
     pub gpus: Vec<Gpu>,
     /// vulkan-1.dll: a Vulkan loader is installed
     pub vulkan_loader: bool,
@@ -24,8 +20,7 @@ pub struct Hardware {
 
 impl Hardware {
     pub fn detect() -> Hardware {
-        let mut hardware = detect_platform();
-        hardware.gpus.sort_by(|a, b| b.memory.cmp(&a.memory));
+        let hardware = detect_platform();
         log::info!(
             "GPUs: {}; Vulkan loader: {}",
             if hardware.gpus.is_empty() {

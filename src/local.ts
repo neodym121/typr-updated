@@ -29,11 +29,6 @@ interface RuntimeStatus {
   installed: boolean;
 }
 
-interface Gpu {
-  name: string;
-  memory: number;
-}
-
 interface LoadedView {
   model: string;
   name: string;
@@ -55,8 +50,6 @@ interface LocalStatus {
   models: ModelStatus[];
   backends: BackendStatus[];
   recommended: Backend;
-  /** Most dedicated memory first */
-  gpus: Gpu[];
   runtime: RuntimeStatus;
   loaded: LoadedView | null;
   downloads: DownloadProgress[];
@@ -88,7 +81,6 @@ const panel = document.getElementById("local-settings")!;
 const unsupportedNote = document.getElementById("local-unsupported")!;
 const modelList = document.getElementById("local-model-list")!;
 const backendButtons = document.querySelectorAll<HTMLButtonElement>("#local-backends .segment");
-const backendHint = document.getElementById("local-backend-hint")!;
 const fallbackLine = document.getElementById("local-fallback")!;
 const runtimeHint = document.getElementById("local-runtime-hint")!;
 const runtimeActions = document.getElementById("local-runtime-actions")!;
@@ -319,11 +311,6 @@ function renderBackends() {
     b.classList.toggle("active", id === current);
     b.title = available ? "" : t(`local.unavailable.${id}` as MessageKey);
   });
-
-  const gpu = status.gpus[0];
-  if (!gpu) backendHint.textContent = t("local.noGpu");
-  else if (status.recommended === "vulkan") backendHint.textContent = t("local.gpuRecommended", { gpu: gpu.name });
-  else backendHint.textContent = t("local.noVulkan", { gpu: gpu.name });
 
   // The model in memory couldn't start on the GPU and runs on the processor
   const fallback = status.loaded?.fallback;

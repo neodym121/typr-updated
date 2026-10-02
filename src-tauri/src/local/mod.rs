@@ -29,7 +29,7 @@ use tauri::{AppHandle, Emitter};
 
 use catalog::{Backend, ModelSpec, MODELS, RUNTIME};
 use download::{DownloadError, Expected};
-use hardware::{Gpu, Hardware};
+use hardware::Hardware;
 use runtime::Paths;
 use worker::{Worker, WorkerError};
 
@@ -135,7 +135,6 @@ pub struct LocalStatus {
     pub models: Vec<ModelStatus>,
     pub backends: Vec<BackendStatus>,
     pub recommended: Backend,
-    pub gpus: Vec<Gpu>,
     pub runtime: RuntimeStatus,
     pub loaded: Option<LoadedView>,
     pub downloads: Vec<DownloadProgress>,
@@ -243,7 +242,6 @@ impl LocalEngine {
             models,
             backends,
             recommended: hardware.recommended(),
-            gpus: hardware.gpus.clone(),
             runtime: RuntimeStatus {
                 size: RUNTIME.size,
                 installed: runtime::is_runtime_installed(paths),

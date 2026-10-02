@@ -654,14 +654,16 @@ button {
   padding: 0 12px;
 }
 
-/* Square button with an icon only (the trash of a delete) */
-.btn-icon {
-  width: 28px;
+/* Square button with an icon only (the trash of a delete). Two classes,
+   so .btn's padding (defined later) doesn't squeeze the icon to nothing */
+.btn.btn-icon {
+  aspect-ratio: 1;
   padding: 0;
 }
 
 .btn-icon svg {
   display: block;
+  flex: none;
 }
 
 /* Engine → Local: the components are missing or failed to download */
