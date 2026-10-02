@@ -23,7 +23,9 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // 127.0.0.1, not "localhost": that can resolve to IPv6 only, and then
+    // `tauri dev` keeps waiting for the server on IPv4
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",

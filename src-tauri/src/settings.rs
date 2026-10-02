@@ -26,6 +26,14 @@ fn default_assemblyai_model() -> String {
     "universal-3-5-pro".to_string()
 }
 
+fn default_local_model() -> String {
+    crate::local::catalog::DEFAULT_MODEL.to_string()
+}
+
+fn default_local_unload() -> String {
+    "5m".to_string()
+}
+
 fn default_recording_mode() -> String {
     "toggle".to_string()
 }
@@ -145,6 +153,17 @@ pub struct Settings {
     /// "universal-3-5-pro" (no Russian) or "universal-2"
     #[serde(rename = "assemblyaiModel", default = "default_assemblyai_model")]
     pub assemblyai_model: String,
+    /// Local engine: the model used for dictation (an id from local::catalog)
+    #[serde(rename = "localModel", default = "default_local_model")]
+    pub local_model: String,
+    /// Local engine: "vulkan" | "cpu", or empty for the one recommended
+    /// for this computer
+    #[serde(rename = "localBackend", default)]
+    pub local_backend: String,
+    /// Local engine: when an idle model leaves memory:
+    /// "immediate" | "30s" | "5m" | "10m" | "never"
+    #[serde(rename = "localUnload", default = "default_local_unload")]
+    pub local_unload: String,
     #[serde(rename = "recordingMode", default = "default_recording_mode")]
     pub recording_mode: String,
     #[serde(default = "default_hotkey")]
@@ -180,6 +199,9 @@ impl Default for Settings {
             polza_provider: String::new(),
             assemblyai_api_key: String::new(),
             assemblyai_model: "universal-3-5-pro".to_string(),
+            local_model: default_local_model(),
+            local_backend: String::new(),
+            local_unload: default_local_unload(),
             recording_mode: "toggle".to_string(),
             hotkey: "Ctrl+Shift+Space".to_string(),
             append_space: false,
@@ -210,10 +232,6 @@ impl Settings {
             Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
             Err(_) => Self::default(),
         };
-        // Migrate legacy "local" engine to "groq"
-        if settings.engine == "local" {
-            settings.engine = "groq".to_string();
-        }
         // The "official" post-processing preset became "proper"
         if settings.post_process.preset == "official" {
             settings.post_process.preset = "proper".to_string();
@@ -256,7 +274,7 @@ impl Settings {
     /// only whether they are set.
     pub fn summary(&self) -> String {
         format!(
-            "engine={}, mode={}, hotkey={}, appendSpace={}, mic='{}', groqModel={}, groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, assemblyaiModel={}, assemblyaiKey={}, showIndicator={}, language={}, postProcess={}, developerMode={}",
+            "engine={}, mode={}, hotkey={}, appendSpace={}, mic='{}', groqModel={}, groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, assemblyaiModel={}, assemblyaiKey={}, localModel={}, localBackend={}, localUnload={}, showIndicator={}, language={}, postProcess={}, developerMode={}",
             self.engine,
             self.recording_mode,
             self.hotkey,
@@ -272,6 +290,9 @@ impl Settings {
             key_state(&self.polza_api_key),
             self.assemblyai_model,
             key_state(&self.assemblyai_api_key),
+            self.local_model,
+            if self.local_backend.is_empty() { "auto" } else { self.local_backend.as_str() },
+            self.local_unload,
             self.show_indicator,
             if self.language.is_empty() { "system" } else { self.language.as_str() },
             self.post_process_summary(),
@@ -310,6 +331,9 @@ impl Settings {
             ("polzaModel", &old.polza_model, &self.polza_model),
             ("polzaProvider", &old.polza_provider, &self.polza_provider),
             ("assemblyaiModel", &old.assemblyai_model, &self.assemblyai_model),
+            ("localModel", &old.local_model, &self.local_model),
+            ("localBackend", &old.local_backend, &self.local_backend),
+            ("localUnload", &old.local_unload, &self.local_unload),
             ("language", &old.language, &self.language),
             ("postProcess.provider", &old.post_process.provider, &self.post_process.provider),
             ("postProcess.preset", &old.post_process.preset, &self.post_process.preset),
@@ -422,6 +446,9 @@ mod tests {
         assert_eq!(settings.polza_provider, "");
         assert_eq!(settings.assemblyai_api_key, "");
         assert_eq!(settings.assemblyai_model, "universal-3-5-pro");
+        assert_eq!(settings.local_model, "parakeet-tdt-0.6b-v3");
+        assert_eq!(settings.local_backend, "");
+        assert_eq!(settings.local_unload, "5m");
         assert_eq!(settings.language, "");
         assert_eq!(settings.recording_mode, "toggle");
         assert_eq!(settings.hotkey, "Ctrl+Shift+Space");
@@ -509,6 +536,28 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_local_settings_get_defaults() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"microphone":"default","engine":"local"}"#).unwrap();
+        assert_eq!(settings.engine, "local");
+        assert_eq!(settings.local_model, "parakeet-tdt-0.6b-v3");
+        assert_eq!(settings.local_backend, "");
+        assert_eq!(settings.local_unload, "5m");
+    }
+
+    #[test]
+    fn test_local_changes_are_logged() {
+        let old = Settings::default();
+        let mut new = Settings::default();
+        new.local_backend = "vulkan".to_string();
+        new.local_unload = "never".to_string();
+        let changes = new.describe_changes(&old).join("; ");
+        assert!(changes.contains("localBackend: '' → 'vulkan'"));
+        assert!(changes.contains("localUnload: '5m' → 'never'"));
+        assert!(new.summary().contains("localBackend=vulkan"));
+    }
+
+    #[test]
     fn test_missing_show_indicator_defaults_to_true() {
         let settings: Settings =
             serde_json::from_str(r#"{"microphone":"default","engine":"groq"}"#).unwrap();
@@ -538,14 +587,14 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_local_migrated_to_groq() {
-        let dir = temp_dir().join("typr_test_legacy");
+    fn test_local_engine_survives_a_restart() {
+        let dir = temp_dir().join("typr_test_local_engine");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("config.json"), r#"{"microphone":"default","engine":"local"}"#).unwrap();
 
         let loaded = Settings::load(&dir);
-        assert_eq!(loaded.engine, "groq");
+        assert_eq!(loaded.engine, "local");
 
         let _ = fs::remove_dir_all(&dir);
     }

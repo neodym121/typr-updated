@@ -1,6 +1,6 @@
 # AGENTS.md — Typr
 
-Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Rust backend) and vanilla TypeScript frontend. It records audio via a global hotkey, transcribes it using Groq, OpenAI (or any OpenAI-compatible API), Polza.AI or AssemblyAI, optionally polishes the text with a language model, and auto-pastes the result into the active window. The interface is in English and Russian.
+Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Rust backend) and vanilla TypeScript frontend. It records audio via a global hotkey, transcribes it locally with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) or in the cloud with Groq, OpenAI (or any OpenAI-compatible API), Polza.AI or AssemblyAI, optionally polishes the text with a language model, and auto-pastes the result into the active window. The interface is in English and Russian.
 
 ---
 
@@ -13,6 +13,7 @@ typr/
 │   ├── i18n.ts                 # English/Russian UI strings, t(), data-i18n attributes
 │   ├── dropdown.ts             # App-styled dropdowns over hidden native <select>s
 │   ├── postprocess.ts          # Post-processing section: provider, key, model list with search, styles
+│   ├── local.ts                # Engine → Local: models, acceleration, runtime components, unloading
 │   ├── overlay.html            # Mic indicator overlay (WebView fallback for non-Windows)
 │   └── style.css               # Global styles
 ├── src-tauri/                  # Rust backend (Tauri)
@@ -25,6 +26,14 @@ typr/
 │       ├── transcribe_openai.rs# OpenAI / OpenAI-compatible API client
 │       ├── transcribe_polza.rs # Polza.AI client (JSON body, base64 data URL)
 │       ├── transcribe_assemblyai.rs # AssemblyAI client (upload → transcript job → poll)
+│       ├── transcribe_local.rs # Local engine entry: in-memory samples → local::LocalEngine
+│       ├── local/              # Local recognition with transcribe.cpp
+│       │   ├── mod.rs          # LocalEngine: runtime + model in memory, preload, unload timer, downloads, status
+│       │   ├── catalog.rs      # Models and the runtime with pinned URLs, sizes, SHA-256
+│       │   ├── hardware.rs     # GPUs from the registry, whether Vulkan is available
+│       │   ├── download.rs     # Resumable, cancellable, verified downloads
+│       │   ├── runtime.rs      # Files on disk, unpacking and checking the runtime
+│       │   └── ffi.rs          # transcribe.dll loaded at run time (C API of v0.2.4)
 │       ├── keyboard.rs         # Hotkey must be pressed on its own (GetAsyncKeyState check)
 │       ├── i18n.rs             # System language detection, tray menu strings
 │       ├── net.rs              # Shared HTTP client (timeouts) + response/error helpers
@@ -51,6 +60,7 @@ Manages the `RecordingState` state machine (`Ready → Recording → Transcribin
 1. Starts audio capture via `AudioRecorder`
 2. Saves WAV to a temp file
 3. Calls the configured transcription engine
+   (the local engine skips the WAV: the samples go straight to transcribe.cpp)
 4. Runs `cleanup_text()` on the result
 5. If post-processing is on, rewrites the text with `postprocess::process()`; on failure the transcribed text is pasted anyway and the error is reported afterwards
 6. Calls `paste_text()` to inject into the active window
@@ -58,10 +68,13 @@ Manages the `RecordingState` state machine (`Ready → Recording → Transcribin
 
 ### `settings.rs` — Configuration
 Persisted to `config.json` in the Tauri app data directory. Key fields:
-- `engine`: `"groq"` | `"openai"` | `"openai-compatible"` | `"polza"` | `"assemblyai"` (default: `"groq"`)
+- `engine`: `"local"` | `"groq"` | `"openai"` | `"openai-compatible"` | `"polza"` | `"assemblyai"` (default: `"groq"`)
 - `groqModel`: `"whisper-large-v3-turbo"` (default) | `"whisper-large-v3"`
 - `groqApiKey`, `openaiApiKey`, `openaiEndpoint`, `openaiModel`, `polzaApiKey`, `polzaModel`, `polzaProvider`, `assemblyaiApiKey`
 - `assemblyaiModel`: `"universal-3-5-pro"` (default, no Russian) | `"universal-2"`
+- `localModel`: model id from `local/catalog.rs` used for dictation (default `"parakeet-tdt-0.6b-v3"`)
+- `localBackend`: `"vulkan"` | `"cpu"`, or empty for the one recommended for this computer
+- `localUnload`: when an idle model leaves memory: `"immediate"` | `"30s"` | `"5m"` (default) | `"10m"` | `"never"`
 - `language`: `"en"` | `"ru"` | `""` (empty follows the system, see `i18n.rs`)
 - `developerMode`: shows the Developer section and turns log collection on
 - `microphone`: device name or `"default"`
@@ -71,13 +84,20 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 - `showIndicator`: whether the recording indicator may appear at all (default `true`, switch in General)
 - `postProcess`: `enabled` (default `false`), `provider` (`"gemini"` | `"openrouter"` | `"groq"` | `"polza"`), `preset` (`"chill"` | `"proper"` | `"custom"`; the old `"official"` is migrated to `"proper"` on load), `customPrompt`, and `{ apiKey, model }` per provider, plus `providerId` for Polza (sub-provider sent as `provider.only`, omitted from the file when empty). Groq and Polza fall back to the Engine key when their own is empty (`Settings::post_process_key`)
 
-> **Note:** The legacy `"local"` engine value is silently migrated to `"groq"` on load.
-
 ### `transcribe_groq.rs` / `transcribe_openai.rs`
 Both send a multipart form POST with the WAV file to the respective API. `transcribe_openai.rs` is also used for any OpenAI-compatible endpoint (e.g. local Whisper servers) via the configurable `openaiEndpoint`.
 
 ### `transcribe_assemblyai.rs`
 Three steps: `POST /v2/upload` with the raw WAV, `POST /v2/transcript` with `speech_models: [model]` and `language_detection: true`, then poll `GET /v2/transcript/{id}` until `completed` or `error`. Universal-3.5 Pro supports 18 languages without Russian; if it rejects the language, the error suggests Universal-2.
+
+### `local/` — local recognition (transcribe.cpp)
+- Nothing native is compiled with Typr. `ffi.rs` loads `transcribe.dll` with LoadLibrary from the **runtime** downloaded on demand, mirrors the v0.2.4 C header (`include/transcribe.h` at the tag) and refuses a DLL whose version or struct sizes (`transcribe_abi_struct_size`) differ. Bump `TRANSCRIBE_VERSION`/`HEADER_HASH` in `catalog.rs`, the structs in `ffi.rs` and the pinned bundle together.
+- The runtime (`catalog.rs` `RUNTIME`) is the official `windows-x86_64-cpu-vulkan` bundle: Vulkan for any GPU with a Vulkan driver, CPU modules for every processor. Its `contract.json` must match `TRANSCRIBE_VERSION` and `HEADER_HASH`. CUDA and ROCm are left out on purpose: their kernels are compiled per GPU generation, so each needs its own builds and checks (the official CUDA bundle covers compute capability 7.5–9.0 only; ROCm has no official Windows build). Measured on an RX 7600 (Parakeet, 11 s of audio, warm): Vulkan 0.12 s, CPU 0.8 s.
+- `hardware.rs`: GPUs from the display adapter class in the registry (PCI devices, most dedicated memory first) and `vulkan-1.dll` in System32. A GPU with Vulkan → Vulkan recommended, otherwise the CPU (Vulkan greyed out).
+- `LocalEngine` keeps one model: preloaded when a dictation starts (`begin_recording`), freed by `schedule_unload` after `localUnload` (a generation counter cancels stale timers), right away when the engine/model/backend changes. A GPU load failure falls back to the CPU (the reason shows under Acceleration while that model is in memory).
+- Models (Q8_0 GGUF from `huggingface.co/handy-computer`) and the runtime live in `%LOCALAPPDATA%\com.typr.app\local` (`models`, `runtimes`, `downloads`); downloads resume from `.part` files and are checked against size and SHA-256.
+- Tauri commands: `local_status`, `local_download_model`, `local_download_runtime`, `local_cancel_download`, `local_delete_model`, `local_delete_runtime`; events `local-download` (progress) and `local-changed` (re-read the status).
+- `cargo test real_local_transcription -- --ignored --nocapture` with `TYPR_TEST_WAV` (16 kHz mono) downloads the runtime and Parakeet and transcribes on the real GPU and CPU.
 
 ### `postprocess.rs` — LLM post-processing
 - `list_models(provider, key)` (Tauri command `list_postprocess_models`) returns text models only: Gemini `GET /v1beta/models` filtered by `generateContent`; OpenRouter, Groq and Polza `GET /models` (OpenAI format) filtered by `type`, `output_modalities` and, for Groq, speech/guard ids.
@@ -137,6 +157,8 @@ npm run tauri build
 cd src-tauri
 cargo test
 ```
+
+`build.rs` embeds the Common Controls v6 manifest (`windows-app-manifest.xml`) through the linker for every target, so test binaries that link Tauri start on Windows (otherwise `STATUS_ENTRYPOINT_NOT_FOUND`).
 
 ---
 

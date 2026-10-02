@@ -11,6 +11,7 @@ use crate::postprocess;
 use crate::settings::Settings;
 use crate::transcribe_assemblyai;
 use crate::transcribe_groq;
+use crate::transcribe_local;
 use crate::transcribe_openai;
 use crate::transcribe_polza;
 
@@ -80,8 +81,9 @@ impl Recorder {
         Ok(())
     }
 
-    /// Stops an unfinished recording and throws the audio away.
-    pub fn cancel_recording(&self, app: &AppHandle) {
+    /// Stops an unfinished recording and throws the audio away. Returns
+    /// whether there was one.
+    pub fn cancel_recording(&self, app: &AppHandle) -> bool {
         let cancelled = {
             let mut state = self.state.lock().unwrap();
             if *state == RecordingState::Recording {
@@ -96,6 +98,7 @@ impl Recorder {
             publish_state(app, &RecordingState::Ready);
             log::info!("Recording cancelled, audio discarded");
         }
+        cancelled
     }
 
     /// Stops the recording, transcribes it and pastes the result.
@@ -124,6 +127,7 @@ impl Recorder {
             *state = RecordingState::Ready;
         }
         publish_state(app, &RecordingState::Ready);
+        transcribe_local::dictation_ended(app, settings);
 
         match &result {
             Ok(text) => log::info!(
@@ -168,17 +172,20 @@ impl Recorder {
             );
         }
 
-        let temp_path = app_dir.join("temp_recording.wav");
-        audio::write_wav(&temp_path, &captured)?;
-
         log::info!("Transcribing with engine '{}'", settings.engine);
-        let transcription = transcribe(settings, &temp_path).await;
+        let raw_text = if settings.engine == "local" {
+            transcribe_local::transcribe_local(app, settings, captured.samples).await?
+        } else {
+            let temp_path = app_dir.join("temp_recording.wav");
+            audio::write_wav(&temp_path, &captured)?;
 
-        if let Err(e) = std::fs::remove_file(&temp_path) {
-            log::debug!("Could not remove {}: {}", temp_path.display(), e);
-        }
+            let transcription = transcribe(settings, &temp_path).await;
 
-        let raw_text = transcription?;
+            if let Err(e) = std::fs::remove_file(&temp_path) {
+                log::debug!("Could not remove {}: {}", temp_path.display(), e);
+            }
+            transcription?
+        };
         log::debug!("Raw transcription: {:?}", raw_text);
 
         let mut text = cleanup_text(&raw_text);

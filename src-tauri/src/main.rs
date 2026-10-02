@@ -13,6 +13,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use typr_lib::audio;
 use typr_lib::i18n;
 use typr_lib::keyboard::HotkeyKeys;
+use typr_lib::local::{runtime::Paths as LocalPaths, LocalEngine, LocalStatus};
 use typr_lib::logger::{self, LogEntry};
 use typr_lib::overlay::{self, Placement};
 use typr_lib::postprocess::{self, ModelInfo};
@@ -127,7 +128,10 @@ fn set_hotkey_enabled(app: &tauri::AppHandle, enabled: bool) {
         }
         state.ptt_held.store(false, Ordering::SeqCst);
         // Never paste into whatever is focused now (e.g. a game)
-        state.recorder.cancel_recording(app);
+        if state.recorder.cancel_recording(app) {
+            let settings = state.settings.lock().unwrap().clone();
+            typr_lib::transcribe_local::dictation_ended(app, &settings);
+        }
         log::info!("Hotkey turned off from the tray, shortcuts are ignored until it is back on");
     }
 
@@ -187,6 +191,7 @@ fn save_settings(
 
     let indicator_changed = settings.show_indicator != old.show_indicator;
     let language_changed = settings.language != old.language;
+    app.state::<LocalEngine>().settings_changed(&old, &settings);
     *state.settings.lock().unwrap() = settings;
     if indicator_changed {
         sync_overlay(&app);
@@ -261,6 +266,44 @@ fn engine_key(state: &AppState, provider: &str) -> String {
     state.settings.lock().unwrap().engine_key(provider).to_string()
 }
 
+// ── Local recognition ───────────────────────────────
+
+#[tauri::command]
+async fn local_status(engine: State<'_, LocalEngine>) -> Result<LocalStatus, String> {
+    Ok(engine.status())
+}
+
+#[tauri::command]
+async fn local_download_model(engine: State<'_, LocalEngine>, id: String) -> Result<(), String> {
+    engine.download_model(&id)
+}
+
+#[tauri::command]
+async fn local_download_runtime(engine: State<'_, LocalEngine>) -> Result<(), String> {
+    engine.download_runtime()
+}
+
+/// `key` is "model:<id>" or "runtime"
+#[tauri::command]
+async fn local_cancel_download(engine: State<'_, LocalEngine>, key: String) -> Result<(), String> {
+    engine.cancel_download(&key);
+    Ok(())
+}
+
+#[tauri::command]
+async fn local_delete_model(engine: State<'_, LocalEngine>, id: String) -> Result<(), String> {
+    // Waits for a running dictation to release the model
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || engine.delete_model(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn local_delete_runtime(engine: State<'_, LocalEngine>) -> Result<(), String> {
+    engine.delete_runtime()
+}
+
 #[tauri::command]
 fn get_logs() -> Vec<LogEntry> {
     logger::entries()
@@ -277,12 +320,21 @@ fn frontend_log(level: String, message: String) {
 }
 
 fn begin_recording(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
-    let mic = state.settings.lock().unwrap().microphone.clone();
-    state.recorder.start_recording(app, &mic).map_err(|e| {
-        log::error!("Failed to start recording: {}", e);
-        recorder::notify_error(app, &e);
-        e
-    })
+    let settings = state.settings.lock().unwrap().clone();
+    state
+        .recorder
+        .start_recording(app, &settings.microphone)
+        .map_err(|e| {
+            log::error!("Failed to start recording: {}", e);
+            recorder::notify_error(app, &e);
+            e
+        })?;
+    // The local model loads while the user speaks
+    if settings.engine == "local" {
+        app.state::<LocalEngine>()
+            .preload(&settings.local_model, &settings.local_backend);
+    }
+    Ok(())
 }
 
 async fn finish_recording(app: &tauri::AppHandle, state: &AppState) -> Result<String, String> {
@@ -474,6 +526,7 @@ fn main() {
             ptt_held: AtomicBool::new(false),
             hotkey_enabled: AtomicBool::new(true),
         })
+        .manage(LocalEngine::new(LocalPaths::new(LocalPaths::default_root())))
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
@@ -483,6 +536,12 @@ fn main() {
             get_hotkey_enabled,
             get_system_language,
             list_postprocess_models,
+            local_status,
+            local_download_model,
+            local_download_runtime,
+            local_cancel_download,
+            local_delete_model,
+            local_delete_runtime,
             get_logs,
             clear_logs,
             frontend_log,
@@ -496,6 +555,7 @@ fn main() {
         })
         .setup(move |app| {
             logger::attach_app(app.handle().clone());
+            app.state::<LocalEngine>().attach(app.handle().clone());
             log_environment(&startup_dir, &startup_settings);
 
             // System tray: hotkey on/off switch and Exit, in the interface language

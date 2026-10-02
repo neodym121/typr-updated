@@ -389,6 +389,14 @@ button {
   margin: 24px 0 8px 2px;
 }
 
+/* A line under a group title, above its card */
+.group-hint {
+  margin: -4px 0 10px 2px;
+  font-size: var(--text-small);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
 /* ── Cards & Setting Rows ───────────────────────────── */
 
 .card {
@@ -568,6 +576,152 @@ button {
 
 .custom-prompt textarea::placeholder {
   color: var(--text-faint);
+}
+
+/* Local engine (src/local.ts): model rows, badges, download progress */
+.local-note {
+  margin-bottom: 12px;
+  font-size: var(--text-small);
+  color: var(--accent-light);
+}
+
+.local-model {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.local-model + .local-model {
+  border-top: 1px solid var(--border);
+}
+
+.local-model-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.local-model-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 2px;
+}
+
+.local-model-name {
+  font-size: var(--text-body);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* Languages and size, on their own line under the description */
+.local-model-meta {
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.badge-default {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--text-on-light);
+}
+
+.local-model-actions,
+.local-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-compact {
+  height: 28px;
+  padding: 0 12px;
+}
+
+.btn-secondary.danger {
+  color: var(--accent-light);
+  border-color: rgba(217, 119, 87, 0.45);
+}
+
+.progress {
+  position: relative;
+  height: 4px;
+  margin-top: 8px;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border-radius: var(--radius-pill);
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--text-primary);
+  border-radius: inherit;
+  transition: width 0.2s linear;
+}
+
+/* Size unknown yet, or unpacking: a sweeping bar */
+.progress.indeterminate .progress-fill {
+  width: 35% !important;
+  animation: progress-sweep 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(290%); }
+}
+
+.progress-text {
+  font-size: var(--text-small);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.runtime-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  width: 150px;
+}
+
+.runtime-progress .progress {
+  width: 100%;
+  margin-top: 0;
+}
+
+.local-error {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--text-small);
+  line-height: 1.4;
+  color: var(--accent-light);
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.segment:disabled,
+.segment:disabled:hover {
+  color: var(--text-faint);
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* App-styled dropdown (src/dropdown.ts) over a hidden native <select> */
@@ -1161,6 +1315,17 @@ input.log-search {
   /* Longer Russian labels still fit the engine tabs and log levels */
   .segment {
     padding: 0 8px;
+  }
+
+  /* Five engines: a long label wraps instead of pushing past the edge */
+  .engine-tabs .segment {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 28px;
+    padding: 4px 8px;
+    line-height: 1.2;
+    white-space: normal;
+    text-align: center;
   }
 
   .log-toolbar .segment {

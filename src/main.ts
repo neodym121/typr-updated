@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enhanceSelect, syncSelect } from "./dropdown";
 import { getLanguage, setLanguage, t, type Lang, type MessageKey } from "./i18n";
+import { fillLocal, initLocal, showLocal, translateLocal } from "./local";
 import {
   fillPostProcess,
   initPostProcess,
@@ -25,6 +26,10 @@ interface Settings {
   polzaProvider: string;
   assemblyaiApiKey: string;
   assemblyaiModel: string;
+  /** Local engine: model id, backend ("" = recommended) and unload delay */
+  localModel: string;
+  localBackend: string;
+  localUnload: string;
   recordingMode: string;
   hotkey: string;
   appendSpace: boolean;
@@ -111,10 +116,13 @@ const statusText = document.getElementById("status-text")!;
 const statusDetail = document.getElementById("status-detail")!;
 const micSelect = document.getElementById("mic-select") as HTMLSelectElement;
 const indicatorToggle = document.getElementById("indicator-toggle") as HTMLInputElement;
+const engineLocal = document.getElementById("engine-local")!;
 const engineGroq = document.getElementById("engine-groq")!;
 const engineOpenai = document.getElementById("engine-openai")!;
 const enginePolza = document.getElementById("engine-polza")!;
 const engineAssemblyai = document.getElementById("engine-assemblyai")!;
+const localSettings = document.getElementById("local-settings")!;
+const cloudSettings = document.getElementById("cloud-settings")!;
 const groqSettings = document.getElementById("groq-settings")!;
 const openaiSettings = document.getElementById("openai-settings")!;
 const polzaSettings = document.getElementById("polza-settings")!;
@@ -162,6 +170,7 @@ function showSection(name: string) {
   navItems.forEach((n) => n.classList.toggle("active", n.dataset.section === name));
   sections.forEach((s) => s.classList.toggle("active", s.id === `section-${name}`));
   if (name === "postprocess") showPostProcess();
+  if (name === "engine") showLocal();
   if (name === "developer") {
     unseenErrors = 0;
     updateDevBadge();
@@ -200,6 +209,7 @@ const ASSEMBLYAI_MODELS = ["universal-3-5-pro", "universal-2"];
 [micSelect, groqModel, assemblyaiModel].forEach(enhanceSelect);
 
 initPostProcess({ settings: () => currentSettings, save: saveQuietly });
+initLocal({ settings: () => currentSettings, save: saveQuietly });
 
 // The window stays hidden until its language is known (see .i18n-pending);
 // the timeout makes sure a failed startup never leaves it blank
@@ -220,6 +230,7 @@ function applyLanguage(lang: Lang) {
   renderMicOptions();
   updateLogMeta();
   translatePostProcess();
+  translateLocal();
 }
 
 function formatKeyForDisplay(key: string): string {
@@ -317,11 +328,15 @@ async function loadSettings() {
   // Post-processing
   fillPostProcess();
 
+  // Local engine
+  fillLocal();
+
   uiLog("debug", `Settings loaded, ${microphones.length} microphone(s) available`);
 }
 
 function setEngine(engine: string) {
   currentSettings.engine = engine;
+  engineLocal.classList.toggle("active", engine === "local");
   engineGroq.classList.toggle("active", engine === "groq");
   engineOpenai.classList.toggle("active", engine === "openai");
   enginePolza.classList.toggle("active", engine === "polza");
@@ -330,6 +345,8 @@ function setEngine(engine: string) {
   openaiSettings.classList.toggle("hidden", engine !== "openai");
   polzaSettings.classList.toggle("hidden", engine !== "polza");
   assemblyaiSettings.classList.toggle("hidden", engine !== "assemblyai");
+  localSettings.classList.toggle("hidden", engine !== "local");
+  cloudSettings.classList.toggle("hidden", engine === "local");
 }
 
 // Selects a saved model; an unknown one falls back to the first option
@@ -374,6 +391,12 @@ function saveQuietly() {
 }
 
 // Event listeners for settings
+engineLocal.addEventListener("click", () => {
+  setEngine("local");
+  saveQuietly();
+  showLocal();
+});
+
 engineGroq.addEventListener("click", () => {
   setEngine("groq");
   saveQuietly();

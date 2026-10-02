@@ -64,7 +64,7 @@
           </button>
         </nav>
         <div class="sidebar-footer">
-          <span class="version-text" id="version-text">v1.2.1</span>
+          <span class="version-text" id="version-text">v1.3.0</span>
         </div>
       </aside>
 
@@ -130,15 +130,65 @@
         <section id="section-engine" class="content-section">
           <header class="section-header">
             <h1 class="section-title" data-i18n="engine.title">Engine</h1>
-            <p class="section-desc" data-i18n="engine.desc">The cloud service that turns your speech into text</p>
+            <p class="section-desc" data-i18n="engine.desc">A local model or a cloud service turns your speech into text</p>
           </header>
           <div class="segmented full engine-tabs">
+            <button type="button" id="engine-local" class="segment" data-i18n="engine.local">Local</button>
             <button type="button" id="engine-groq" class="segment active">Groq Cloud</button>
             <button type="button" id="engine-polza" class="segment">Polza</button>
             <button type="button" id="engine-assemblyai" class="segment">AssemblyAI</button>
             <button type="button" id="engine-openai" class="segment" data-i18n="engine.openai">OpenAI Compatible</button>
           </div>
-          <div class="card">
+
+          <!-- Local recognition (src/local.ts) -->
+          <div id="local-settings" class="hidden">
+            <p id="local-unsupported" class="local-note hidden" data-i18n="local.unsupported">Local recognition works on 64-bit Windows only</p>
+            <h2 class="group-title" data-i18n="local.models">Models</h2>
+            <p class="group-hint" data-i18n="local.modelsHint">Downloaded once and run on this computer. The audio never leaves it</p>
+            <div id="local-model-list" class="card"></div>
+
+            <h2 class="group-title" data-i18n="local.performance">Performance</h2>
+            <div class="card">
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text" data-i18n="local.acceleration">Acceleration</span>
+                  <span class="label-hint" id="local-backend-hint"></span>
+                  <span class="local-error hidden" id="local-fallback"></span>
+                </div>
+                <div class="setting-control">
+                  <div class="segmented" id="local-backends">
+                    <button type="button" class="segment" data-backend="vulkan">Vulkan</button>
+                    <button type="button" class="segment" data-backend="cpu" data-i18n="local.cpu">CPU</button>
+                  </div>
+                </div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text" data-i18n="local.components">Engine components</span>
+                  <span class="label-hint" id="local-runtime-hint"></span>
+                  <span class="local-error hidden" id="local-runtime-error"></span>
+                </div>
+                <div class="setting-control local-actions" id="local-runtime-actions"></div>
+              </div>
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text" data-i18n="local.unloadAfter">Unload from memory</span>
+                  <span class="label-hint" data-i18n="local.unloadHint">When an idle model frees the memory it takes</span>
+                </div>
+                <div class="setting-control">
+                  <select id="local-unload">
+                    <option value="immediate" data-i18n="local.unloadImmediate">Right after transcription</option>
+                    <option value="30s" data-i18n="local.unload30s">After 30 seconds</option>
+                    <option value="5m" data-i18n="local.unload5m">After 5 minutes</option>
+                    <option value="10m" data-i18n="local.unload10m">After 10 minutes</option>
+                    <option value="never" data-i18n="local.unloadNever">Never</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" id="cloud-settings">
             <!-- Groq Settings -->
             <div id="groq-settings">
               <div class="setting-row">
