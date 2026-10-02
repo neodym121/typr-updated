@@ -18,7 +18,7 @@ Typr is a lightweight desktop dictation app for Windows. Press a global hotkey, 
 
 - **Global hotkey** in two modes.
 - **Speech-to-text providers:** Groq (Whisper Large v3/v3 Turbo), [Polza.AI](https://polza.ai/), [AssemblyAI](https://www.assemblyai.com/) (Universal-3.5 Pro/Universal-2), and any OpenAI-compatible endpoint.
-- **Post-processing:** an AI model (Gemini, OpenRouter, Groq or Polza) polishes the text before it is pasted, in the Chill, Official or your own style.
+- **Post-processing:** an AI model (Gemini, OpenRouter, Groq or Polza) polishes the text before it is pasted, in the Chill, Proper or your own style.
 - **Clean clipboard:** the dictated text is pasted through the clipboard and stays out of the Windows clipboard history.
 - **Space after the text**, so the next phrase doesn't stick to the previous one.
 - **Recording indicator:** a small mic slides down from behind the top edge of the screen only while you dictate (recording, transcribing, pasting) and hides again.
@@ -32,8 +32,8 @@ Typr is a lightweight desktop dictation app for Windows. Press a global hotkey, 
 The installer is built by GitHub Actions (`.github/workflows/build.yml`) when a `v*` tag is pushed or the workflow is started manually:
 
 ```bash
-git tag v1.2.1
-git push origin v1.2.1
+git tag v1.2.2
+git push origin v1.2.2
 ```
 
 Local development needs [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/) 20+:

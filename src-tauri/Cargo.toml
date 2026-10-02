@@ -1,6 +1,6 @@
 [package]
 name = "typr"
-version = "1.2.0"
+version = "1.2.1"
 description = "A dictation app powered by Whisper"
 authors = ["you"]
 edition = "2021"

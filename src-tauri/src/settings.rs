@@ -43,7 +43,7 @@ fn default_post_process_provider() -> String {
 }
 
 fn default_post_process_preset() -> String {
-    "official".to_string()
+    "proper".to_string()
 }
 
 /// API key and chosen model of one post-processing provider.
@@ -53,6 +53,9 @@ pub struct PostProcessProvider {
     pub api_key: String,
     #[serde(default)]
     pub model: String,
+    /// Sub-provider that serves the model (Polza only); empty means automatic
+    #[serde(rename = "providerId", default, skip_serializing_if = "String::is_empty")]
+    pub provider_id: String,
 }
 
 /// A language model rewrites the transcribed text before it is pasted.
@@ -63,7 +66,7 @@ pub struct PostProcess {
     /// "gemini" | "openrouter" | "groq" | "polza"
     #[serde(default = "default_post_process_provider")]
     pub provider: String,
-    /// "chill" | "official" | "custom"
+    /// "chill" | "proper" | "custom"
     #[serde(default = "default_post_process_preset")]
     pub preset: String,
     /// The user's own instructions for the "custom" preset
@@ -211,6 +214,10 @@ impl Settings {
         if settings.engine == "local" {
             settings.engine = "groq".to_string();
         }
+        // The "official" post-processing preset became "proper"
+        if settings.post_process.preset == "official" {
+            settings.post_process.preset = "proper".to_string();
+        }
         settings
     }
 
@@ -344,6 +351,12 @@ impl Settings {
                     key_state(&after.api_key)
                 ));
             }
+            if before.provider_id != after.provider_id {
+                changes.push(format!(
+                    "postProcess.{}.providerId: '{}' → '{}'",
+                    name, before.provider_id, after.provider_id
+                ));
+            }
         }
 
         if old.post_process.custom_prompt != self.post_process.custom_prompt {
@@ -400,7 +413,7 @@ mod tests {
         assert!(!settings.append_space);
         assert!(!settings.post_process.enabled);
         assert_eq!(settings.post_process.provider, "gemini");
-        assert_eq!(settings.post_process.preset, "official");
+        assert_eq!(settings.post_process.preset, "proper");
         assert_eq!(settings.openai_endpoint, "https://api.openai.com/v1");
         assert_eq!(settings.openai_model, "whisper-1");
         assert_eq!(settings.openai_api_key, "");
@@ -447,6 +460,29 @@ mod tests {
         let settings: Settings =
             serde_json::from_str(r#"{"microphone":"default","engine":"groq"}"#).unwrap();
         assert_eq!(settings.post_process, PostProcess::default());
+    }
+
+    #[test]
+    fn test_official_preset_migrated_to_proper() {
+        let dir = temp_dir().join("typr_test_preset");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("config.json"),
+            r#"{"microphone":"default","postProcess":{"preset":"official"}}"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load(&dir);
+        assert_eq!(loaded.post_process.preset, "proper");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_empty_provider_id_is_not_saved() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(!json.contains("providerId"));
     }
 
     #[test]

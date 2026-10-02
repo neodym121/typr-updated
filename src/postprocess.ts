@@ -9,13 +9,15 @@ import { t, type MessageKey } from "./i18n";
 export interface PostProviderSettings {
   apiKey: string;
   model: string;
+  /** Polza only: sub-provider that serves the model, empty for automatic */
+  providerId?: string;
 }
 
 export interface PostProcessSettings {
   enabled: boolean;
   /** "gemini" | "openrouter" | "groq" | "polza" */
   provider: string;
-  /** "chill" | "official" | "custom" */
+  /** "chill" | "proper" | "custom" */
   preset: string;
   customPrompt: string;
   gemini: PostProviderSettings;
@@ -25,7 +27,7 @@ export interface PostProcessSettings {
 }
 
 type Provider = "gemini" | "openrouter" | "groq" | "polza";
-type Preset = "chill" | "official" | "custom";
+type Preset = "chill" | "proper" | "custom";
 
 interface ModelInfo {
   id: string;
@@ -38,13 +40,7 @@ export interface PostProcessHost {
 }
 
 const PROVIDERS: Provider[] = ["gemini", "openrouter", "groq", "polza"];
-const PRESETS: Preset[] = ["chill", "official", "custom"];
-const LABELS: Record<Provider, string> = {
-  gemini: "Gemini",
-  openrouter: "OpenRouter",
-  groq: "Groq",
-  polza: "Polza",
-};
+const PRESETS: Preset[] = ["chill", "proper", "custom"];
 const KEY_HINTS: Record<Provider, MessageKey> = {
   gemini: "post.keyHintGemini",
   openrouter: "post.keyHintOpenrouter",
@@ -54,9 +50,10 @@ const KEY_HINTS: Record<Provider, MessageKey> = {
 
 const enabledToggle = document.getElementById("post-enabled") as HTMLInputElement;
 const providerSelect = document.getElementById("post-provider") as HTMLSelectElement;
-const providerTitle = document.getElementById("post-provider-title")!;
 const keyInput = document.getElementById("post-key") as HTMLInputElement;
 const keyHint = document.getElementById("post-key-hint")!;
+const polzaProviderRow = document.getElementById("post-polza-provider-row")!;
+const polzaProviderInput = document.getElementById("post-polza-provider") as HTMLInputElement;
 const modelCurrent = document.getElementById("post-model-current")!;
 const refreshButton = document.getElementById("post-model-refresh")!;
 const searchInput = document.getElementById("post-model-search") as HTMLInputElement;
@@ -88,7 +85,7 @@ function currentProvider(): Provider {
 
 function currentPreset(): Preset {
   const preset = settings().preset as Preset;
-  return PRESETS.includes(preset) ? preset : "official";
+  return PRESETS.includes(preset) ? preset : "proper";
 }
 
 /** Groq and Polza can use the key from Engine */
@@ -105,8 +102,9 @@ function renderProvider() {
   const provider = currentProvider();
   providerSelect.value = provider;
   syncSelect(providerSelect);
-  providerTitle.textContent = LABELS[provider];
   keyInput.value = settings()[provider].apiKey || "";
+  polzaProviderRow.classList.toggle("hidden", provider !== "polza");
+  polzaProviderInput.value = settings().polza.providerId || "";
   keyHint.textContent = t(KEY_HINTS[provider]);
   searchInput.value = "";
   renderModels(true);
@@ -255,12 +253,17 @@ export function initPostProcess(appHost: PostProcessHost) {
     host!.save();
   });
 
+  polzaProviderInput.addEventListener("change", () => {
+    settings().polza.providerId = polzaProviderInput.value.trim();
+    host!.save();
+  });
+
   refreshButton.addEventListener("click", () => void loadModels(true));
   searchInput.addEventListener("input", () => renderModels());
 
   presetButtons.forEach((button) => {
     button.addEventListener("click", () => {
-      settings().preset = button.dataset.preset || "official";
+      settings().preset = button.dataset.preset || "proper";
       host!.save();
       renderPreset();
     });

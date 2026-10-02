@@ -64,7 +64,7 @@
           </button>
         </nav>
         <div class="sidebar-footer">
-          <span class="version-text" id="version-text">v1.2.0</span>
+          <span class="version-text" id="version-text">v1.2.1</span>
         </div>
       </aside>
 
@@ -282,18 +282,6 @@
                 </button>
               </div>
             </div>
-            <div class="setting-row">
-              <div class="setting-label">
-                <label class="label-text" for="append-space-toggle" data-i18n="recording.appendSpace">Space after text</label>
-                <span class="label-hint" data-i18n="recording.appendSpaceHint">Adds a space after the pasted text, so the next phrase doesn't stick to it</span>
-              </div>
-              <div class="setting-control">
-                <label class="switch">
-                  <input type="checkbox" id="append-space-toggle" role="switch" />
-                  <span class="switch-track"><span class="switch-thumb"></span></span>
-                </label>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -331,7 +319,6 @@
             </div>
           </div>
 
-          <h2 class="group-title" id="post-provider-title">Gemini</h2>
           <div class="card">
             <div class="setting-row">
               <div class="setting-label">
@@ -340,6 +327,15 @@
               </div>
               <div class="setting-control">
                 <input type="password" id="post-key" placeholder="API key" data-i18n-placeholder="engine.apiKey" />
+              </div>
+            </div>
+            <div class="setting-row hidden" id="post-polza-provider-row">
+              <div class="setting-label">
+                <span class="label-text" data-i18n="engine.providerId">Provider ID</span>
+                <span class="label-hint" data-i18n="engine.providerIdHint">Sub-provider (leave empty for auto)</span>
+              </div>
+              <div class="setting-control">
+                <input type="text" id="post-polza-provider" placeholder="e.g. openai-direct" data-i18n-placeholder="engine.providerIdPlaceholder" spellcheck="false" />
               </div>
             </div>
             <div class="setting-row model-head">
@@ -358,7 +354,6 @@
             </div>
           </div>
 
-          <h2 class="group-title" data-i18n="post.style">Style</h2>
           <div class="card">
             <div class="setting-row">
               <div class="setting-label">
@@ -368,13 +363,28 @@
               <div class="setting-control">
                 <div class="segmented" id="post-presets">
                   <button type="button" class="segment" data-preset="chill" data-i18n="post.chill">Chill</button>
-                  <button type="button" class="segment" data-preset="official" data-i18n="post.official">Official</button>
+                  <button type="button" class="segment" data-preset="proper" data-i18n="post.proper">Proper</button>
                   <button type="button" class="segment" data-preset="custom" data-i18n="post.custom">Custom</button>
                 </div>
               </div>
             </div>
             <div class="custom-prompt hidden" id="post-custom-row">
               <textarea id="post-custom-prompt" rows="4" spellcheck="false" placeholder="e.g. Write in a friendly tone and add emoji where they fit" data-i18n-placeholder="post.customPlaceholder"></textarea>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="setting-row">
+              <div class="setting-label">
+                <label class="label-text" for="append-space-toggle" data-i18n="post.appendSpace">Space after text</label>
+                <span class="label-hint" data-i18n="post.appendSpaceHint">Adds a space after the pasted text, so the next phrase doesn't stick to it. Works even with post-processing off</span>
+              </div>
+              <div class="setting-control">
+                <label class="switch">
+                  <input type="checkbox" id="append-space-toggle" role="switch" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
+              </div>
             </div>
           </div>
         </section>

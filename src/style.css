@@ -398,6 +398,11 @@ button {
   padding: 0 16px;
 }
 
+/* Cards stacked without a group title between them */
+.card + .card {
+  margin-top: 12px;
+}
+
 .setting-row {
   display: flex;
   align-items: center;

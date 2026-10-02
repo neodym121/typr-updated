@@ -67,9 +67,9 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 - `microphone`: device name or `"default"`
 - `recordingMode`: `"toggle"` | `"push-to-talk"`
 - `hotkey`: default `"Ctrl+Shift+Space"`
-- `appendSpace`: adds a space after the pasted text (default `false`, switch in Recording)
+- `appendSpace`: adds a space after the pasted text (default `false`, switch in Post-processing; works with post-processing off too)
 - `showIndicator`: whether the recording indicator may appear at all (default `true`, switch in General)
-- `postProcess`: `enabled` (default `false`), `provider` (`"gemini"` | `"openrouter"` | `"groq"` | `"polza"`), `preset` (`"chill"` | `"official"` | `"custom"`), `customPrompt`, and `{ apiKey, model }` per provider. Groq and Polza fall back to the Engine key when their own is empty (`Settings::post_process_key`)
+- `postProcess`: `enabled` (default `false`), `provider` (`"gemini"` | `"openrouter"` | `"groq"` | `"polza"`), `preset` (`"chill"` | `"proper"` | `"custom"`; the old `"official"` is migrated to `"proper"` on load), `customPrompt`, and `{ apiKey, model }` per provider, plus `providerId` for Polza (sub-provider sent as `provider.only`, omitted from the file when empty). Groq and Polza fall back to the Engine key when their own is empty (`Settings::post_process_key`)
 
 > **Note:** The legacy `"local"` engine value is silently migrated to `"groq"` on load.
 
