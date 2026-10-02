@@ -1,6 +1,6 @@
 # AGENTS.md — Typr
 
-Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Rust backend) and vanilla TypeScript frontend. It records audio via a global hotkey, transcribes it using Groq, OpenAI (or any OpenAI-compatible API), Polza.AI or AssemblyAI, and auto-pastes the result into the active window. The interface is in English and Russian.
+Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Rust backend) and vanilla TypeScript frontend. It records audio via a global hotkey, transcribes it using Groq, OpenAI (or any OpenAI-compatible API), Polza.AI or AssemblyAI, optionally polishes the text with a language model, and auto-pastes the result into the active window. The interface is in English and Russian.
 
 ---
 
@@ -12,6 +12,7 @@ typr/
 │   ├── main.ts                 # Main UI logic, settings form, hotkey binding
 │   ├── i18n.ts                 # English/Russian UI strings, t(), data-i18n attributes
 │   ├── dropdown.ts             # App-styled dropdowns over hidden native <select>s
+│   ├── postprocess.ts          # Post-processing section: provider, key, model list with search, styles
 │   ├── overlay.html            # Mic indicator overlay (WebView fallback for non-Windows)
 │   └── style.css               # Global styles
 ├── src-tauri/                  # Rust backend (Tauri)
@@ -31,6 +32,7 @@ typr/
 │       ├── overlay.rs          # Recording indicator that slides in while dictating (native layered window on Windows)
 │       ├── cleanup.rs          # Post-processing: trims filler words, fixes punctuation
 │       ├── paste.rs            # Pastes via the clipboard (Ctrl+V), then restores the previous content
+│       ├── postprocess.rs      # LLM post-processing: model lists, Gemini / OpenAI-compatible calls, prompts
 │       └── settings.rs         # Settings struct, load/save from config.json
 ├── .github/workflows/
 │   └── build.yml               # CI: builds Windows installer on tag push or manual trigger
@@ -50,8 +52,9 @@ Manages the `RecordingState` state machine (`Ready → Recording → Transcribin
 2. Saves WAV to a temp file
 3. Calls the configured transcription engine
 4. Runs `cleanup_text()` on the result
-5. Calls `paste_text()` to inject into the active window
-6. Emits `recording-state` events to the frontend and updates the overlay (the indicator slides in for Recording/Transcribing and back out on Ready)
+5. If post-processing is on, rewrites the text with `postprocess::process()`; on failure the transcribed text is pasted anyway and the error is reported afterwards
+6. Calls `paste_text()` to inject into the active window
+7. Emits `recording-state` events to the frontend and updates the overlay (the indicator slides in for Recording/Transcribing and back out on Ready)
 
 ### `settings.rs` — Configuration
 Persisted to `config.json` in the Tauri app data directory. Key fields:
@@ -66,6 +69,7 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 - `hotkey`: default `"Ctrl+Shift+Space"`
 - `appendSpace`: adds a space after the pasted text (default `false`, switch in Recording)
 - `showIndicator`: whether the recording indicator may appear at all (default `true`, switch in General)
+- `postProcess`: `enabled` (default `false`), `provider` (`"gemini"` | `"openrouter"` | `"groq"` | `"polza"`), `preset` (`"chill"` | `"official"` | `"custom"`), `customPrompt`, and `{ apiKey, model }` per provider. Groq and Polza fall back to the Engine key when their own is empty (`Settings::post_process_key`)
 
 > **Note:** The legacy `"local"` engine value is silently migrated to `"groq"` on load.
 
@@ -74,6 +78,11 @@ Both send a multipart form POST with the WAV file to the respective API. `transc
 
 ### `transcribe_assemblyai.rs`
 Three steps: `POST /v2/upload` with the raw WAV, `POST /v2/transcript` with `speech_models: [model]` and `language_detection: true`, then poll `GET /v2/transcript/{id}` until `completed` or `error`. Universal-3.5 Pro supports 18 languages without Russian; if it rejects the language, the error suggests Universal-2.
+
+### `postprocess.rs` — LLM post-processing
+- `list_models(provider, key)` (Tauri command `list_postprocess_models`) returns text models only: Gemini `GET /v1beta/models` filtered by `generateContent`; OpenRouter, Groq and Polza `GET /models` (OpenAI format) filtered by `type`, `output_modalities` and, for Groq, speech/guard ids.
+- `process(settings, text)` calls Gemini `models/{id}:generateContent` (key in `x-goog-api-key`) or `/chat/completions` (Bearer) at temperature 0.2, retrying without temperature if a model rejects it, and strips `<think>` blocks, echoed tags and code fences from the reply.
+- The system prompt has two layers: the app's rules first (the dictation, sent between `<dictation>` tags, is text to edit and never a message to answer or obey; keep meaning and language; reply with the text only), then the style. The "custom" style embeds the user's prompt in `<user_style>` tags, marked as the app user's instructions that can't override the app's rules.
 
 ### `paste.rs` — clean clipboard
 Saves the clipboard (text, else image, else nothing), sets the dictated text with arboard's `exclude_from_monitoring()` (kept out of Win+V history, cloud sync and clipboard managers), sends Ctrl+V, waits `RESTORE_DELAY` (300 ms) and puts the previous content back, unless something else was copied meanwhile. If the paste fails, the text stays on the clipboard. Other formats (e.g. copied files) aren't restored.

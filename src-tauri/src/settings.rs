@@ -38,6 +38,83 @@ fn default_true() -> bool {
     true
 }
 
+fn default_post_process_provider() -> String {
+    "gemini".to_string()
+}
+
+fn default_post_process_preset() -> String {
+    "official".to_string()
+}
+
+/// API key and chosen model of one post-processing provider.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PostProcessProvider {
+    #[serde(rename = "apiKey", default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+/// A language model rewrites the transcribed text before it is pasted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PostProcess {
+    #[serde(default)]
+    pub enabled: bool,
+    /// "gemini" | "openrouter" | "groq" | "polza"
+    #[serde(default = "default_post_process_provider")]
+    pub provider: String,
+    /// "chill" | "official" | "custom"
+    #[serde(default = "default_post_process_preset")]
+    pub preset: String,
+    /// The user's own instructions for the "custom" preset
+    #[serde(rename = "customPrompt", default)]
+    pub custom_prompt: String,
+    #[serde(default)]
+    pub gemini: PostProcessProvider,
+    #[serde(default)]
+    pub openrouter: PostProcessProvider,
+    #[serde(default)]
+    pub groq: PostProcessProvider,
+    #[serde(default)]
+    pub polza: PostProcessProvider,
+}
+
+impl Default for PostProcess {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: default_post_process_provider(),
+            preset: default_post_process_preset(),
+            custom_prompt: String::new(),
+            gemini: PostProcessProvider::default(),
+            openrouter: PostProcessProvider::default(),
+            groq: PostProcessProvider::default(),
+            polza: PostProcessProvider::default(),
+        }
+    }
+}
+
+impl PostProcess {
+    pub fn provider_settings(&self, provider: &str) -> Option<&PostProcessProvider> {
+        match provider {
+            "gemini" => Some(&self.gemini),
+            "openrouter" => Some(&self.openrouter),
+            "groq" => Some(&self.groq),
+            "polza" => Some(&self.polza),
+            _ => None,
+        }
+    }
+
+    fn providers(&self) -> [(&'static str, &PostProcessProvider); 4] {
+        [
+            ("gemini", &self.gemini),
+            ("openrouter", &self.openrouter),
+            ("groq", &self.groq),
+            ("polza", &self.polza),
+        ]
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
     pub microphone: String,
@@ -78,6 +155,8 @@ pub struct Settings {
     /// Interface language: "en", "ru", or empty to follow the system
     #[serde(default)]
     pub language: String,
+    #[serde(rename = "postProcess", default)]
+    pub post_process: PostProcess,
     /// Shows the Developer section and turns on log collection
     #[serde(rename = "developerMode", default)]
     pub developer_mode: bool,
@@ -103,6 +182,7 @@ impl Default for Settings {
             append_space: false,
             show_indicator: true,
             language: String::new(),
+            post_process: PostProcess::default(),
             developer_mode: false,
         }
     }
@@ -134,6 +214,30 @@ impl Settings {
         settings
     }
 
+    /// The Engine key of a provider that is also used for post-processing.
+    pub fn engine_key(&self, provider: &str) -> &str {
+        match provider {
+            "groq" => self.groq_api_key.as_str(),
+            "polza" => self.polza_api_key.as_str(),
+            _ => "",
+        }
+    }
+
+    /// API key for post-processing with `provider`. Groq and Polza fall back
+    /// to the key from Engine when no separate one is set.
+    pub fn post_process_key(&self, provider: &str) -> String {
+        let own = self
+            .post_process
+            .provider_settings(provider)
+            .map(|p| p.api_key.trim())
+            .unwrap_or("");
+        if own.is_empty() {
+            self.engine_key(provider).trim().to_string()
+        } else {
+            own.to_string()
+        }
+    }
+
     pub fn save(&self, app_dir: &PathBuf) -> Result<(), String> {
         let path = Self::config_path(app_dir);
         fs::create_dir_all(app_dir).map_err(|e| e.to_string())?;
@@ -145,7 +249,7 @@ impl Settings {
     /// only whether they are set.
     pub fn summary(&self) -> String {
         format!(
-            "engine={}, mode={}, hotkey={}, appendSpace={}, mic='{}', groqModel={}, groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, assemblyaiModel={}, assemblyaiKey={}, showIndicator={}, language={}, developerMode={}",
+            "engine={}, mode={}, hotkey={}, appendSpace={}, mic='{}', groqModel={}, groqKey={}, openaiEndpoint={}, openaiModel={}, openaiKey={}, polzaModel={}, polzaProvider={}, polzaKey={}, assemblyaiModel={}, assemblyaiKey={}, showIndicator={}, language={}, postProcess={}, developerMode={}",
             self.engine,
             self.recording_mode,
             self.hotkey,
@@ -163,7 +267,24 @@ impl Settings {
             key_state(&self.assemblyai_api_key),
             self.show_indicator,
             if self.language.is_empty() { "system" } else { self.language.as_str() },
+            self.post_process_summary(),
             self.developer_mode
+        )
+    }
+
+    fn post_process_summary(&self) -> String {
+        let pp = &self.post_process;
+        let model = pp
+            .provider_settings(&pp.provider)
+            .map(|p| p.model.as_str())
+            .unwrap_or("");
+        format!(
+            "{} (provider {}, model {}, preset {}, key {})",
+            if pp.enabled { "on" } else { "off" },
+            pp.provider,
+            if model.is_empty() { "none" } else { model },
+            pp.preset,
+            key_state(&self.post_process_key(&pp.provider))
         )
     }
 
@@ -183,6 +304,8 @@ impl Settings {
             ("polzaProvider", &old.polza_provider, &self.polza_provider),
             ("assemblyaiModel", &old.assemblyai_model, &self.assemblyai_model),
             ("language", &old.language, &self.language),
+            ("postProcess.provider", &old.post_process.provider, &self.post_process.provider),
+            ("postProcess.preset", &old.post_process.preset, &self.post_process.preset),
         ];
         for (name, before, after) in plain {
             if before != after {
@@ -200,6 +323,41 @@ impl Settings {
             if before != after {
                 changes.push(format!("{} updated ({})", name, key_state(after)));
             }
+        }
+
+        for ((name, before), (_, after)) in old
+            .post_process
+            .providers()
+            .into_iter()
+            .zip(self.post_process.providers())
+        {
+            if before.model != after.model {
+                changes.push(format!(
+                    "postProcess.{}.model: '{}' → '{}'",
+                    name, before.model, after.model
+                ));
+            }
+            if before.api_key != after.api_key {
+                changes.push(format!(
+                    "postProcess.{}.apiKey updated ({})",
+                    name,
+                    key_state(&after.api_key)
+                ));
+            }
+        }
+
+        if old.post_process.custom_prompt != self.post_process.custom_prompt {
+            changes.push(format!(
+                "postProcess.customPrompt updated ({} characters)",
+                self.post_process.custom_prompt.chars().count()
+            ));
+        }
+
+        if old.post_process.enabled != self.post_process.enabled {
+            changes.push(format!(
+                "postProcess.enabled: {} → {}",
+                old.post_process.enabled, self.post_process.enabled
+            ));
         }
 
         if old.append_space != self.append_space {
@@ -240,6 +398,9 @@ mod tests {
         assert_eq!(settings.groq_api_key, "");
         assert_eq!(settings.groq_model, "whisper-large-v3-turbo");
         assert!(!settings.append_space);
+        assert!(!settings.post_process.enabled);
+        assert_eq!(settings.post_process.provider, "gemini");
+        assert_eq!(settings.post_process.preset, "official");
         assert_eq!(settings.openai_endpoint, "https://api.openai.com/v1");
         assert_eq!(settings.openai_model, "whisper-1");
         assert_eq!(settings.openai_api_key, "");
@@ -279,6 +440,36 @@ mod tests {
         let settings: Settings =
             serde_json::from_str(r#"{"microphone":"default","engine":"groq"}"#).unwrap();
         assert!(!settings.developer_mode);
+    }
+
+    #[test]
+    fn test_missing_post_process_gets_defaults() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"microphone":"default","engine":"groq"}"#).unwrap();
+        assert_eq!(settings.post_process, PostProcess::default());
+    }
+
+    #[test]
+    fn test_post_process_key_falls_back_to_engine_key() {
+        let mut settings = Settings::default();
+        settings.groq_api_key = "gsk_engine".to_string();
+        assert_eq!(settings.post_process_key("groq"), "gsk_engine");
+        settings.post_process.groq.api_key = "gsk_own".to_string();
+        assert_eq!(settings.post_process_key("groq"), "gsk_own");
+        assert_eq!(settings.post_process_key("gemini"), "");
+    }
+
+    #[test]
+    fn test_post_process_keys_are_masked_in_logs() {
+        let old = Settings::default();
+        let mut new = Settings::default();
+        new.post_process.gemini.api_key = "AIza_secret".to_string();
+        new.post_process.enabled = true;
+        let changes = new.describe_changes(&old).join("; ");
+        assert!(!changes.contains("AIza_secret"));
+        assert!(!new.summary().contains("AIza_secret"));
+        assert!(changes.contains("postProcess.gemini.apiKey updated (set)"));
+        assert!(changes.contains("postProcess.enabled: false → true"));
     }
 
     #[test]

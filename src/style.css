@@ -438,6 +438,133 @@ button {
   justify-content: flex-end;
 }
 
+/* Post-processing: model list with search, custom prompt */
+.setting-row.model-head {
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+
+.model-head .setting-control {
+  flex: 0 0 auto;
+}
+
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+}
+
+.model-picker input[type="search"] {
+  max-width: none;
+}
+
+.model-list {
+  position: relative;
+  max-height: 232px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.model-option:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.model-option[aria-selected="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Check mark on the chosen model */
+.model-option[aria-selected="true"]::after {
+  content: '';
+  flex-shrink: 0;
+  width: 10px;
+  height: 6px;
+  margin: 0 2px 3px auto;
+  border-left: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+}
+
+.model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-id {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  font-weight: 400;
+}
+
+.model-status {
+  padding: 2px 2px 0;
+  font-size: var(--text-small);
+  color: var(--text-muted);
+}
+
+.model-status.error {
+  color: var(--accent-light);
+}
+
+.custom-prompt {
+  padding-bottom: 14px;
+}
+
+.custom-prompt textarea {
+  display: block;
+  width: 100%;
+  min-height: 92px;
+  padding: 8px 10px;
+  resize: vertical;
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.45;
+  outline: none;
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+
+.custom-prompt textarea:hover {
+  border-color: var(--border-hover);
+}
+
+.custom-prompt textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: var(--focus-halo);
+}
+
+.custom-prompt textarea::placeholder {
+  color: var(--text-faint);
+}
+
 /* App-styled dropdown (src/dropdown.ts) over a hidden native <select> */
 .dropdown {
   position: relative;

@@ -15,6 +15,7 @@ use typr_lib::i18n;
 use typr_lib::keyboard::HotkeyKeys;
 use typr_lib::logger::{self, LogEntry};
 use typr_lib::overlay::{self, Placement};
+use typr_lib::postprocess::{self, ModelInfo};
 use typr_lib::recorder::{self, Recorder, RecordingState};
 use typr_lib::settings::Settings;
 
@@ -233,6 +234,31 @@ fn get_hotkey_enabled(state: State<AppState>) -> bool {
 #[tauri::command]
 fn get_system_language() -> String {
     i18n::system_language().to_string()
+}
+
+/// Models of a post-processing provider. `api_key` is what is typed in the
+/// form (maybe not saved yet); Groq and Polza fall back to the Engine key.
+#[tauri::command]
+async fn list_postprocess_models(
+    state: State<'_, AppState>,
+    provider: String,
+    api_key: String,
+) -> Result<Vec<ModelInfo>, String> {
+    let api_key = if api_key.trim().is_empty() {
+        engine_key(&state, &provider)
+    } else {
+        api_key
+    };
+    postprocess::list_models(&provider, &api_key)
+        .await
+        .map_err(|e| {
+            log::warn!("Could not load post-processing models: {}", e);
+            e
+        })
+}
+
+fn engine_key(state: &AppState, provider: &str) -> String {
+    state.settings.lock().unwrap().engine_key(provider).to_string()
 }
 
 #[tauri::command]
@@ -456,6 +482,7 @@ fn main() {
             toggle_recording,
             get_hotkey_enabled,
             get_system_language,
+            list_postprocess_models,
             get_logs,
             clear_logs,
             frontend_log,

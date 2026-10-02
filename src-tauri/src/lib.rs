@@ -11,6 +11,7 @@ pub mod i18n;
 pub mod keyboard;
 pub mod overlay;
 pub mod paste;
+pub mod postprocess;
 pub mod recorder;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

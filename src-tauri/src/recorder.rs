@@ -7,6 +7,7 @@ use crate::audio::{self, AudioRecorder};
 use crate::cleanup::cleanup_text;
 use crate::overlay::{self, Indicator};
 use crate::paste::paste_text;
+use crate::postprocess;
 use crate::settings::Settings;
 use crate::transcribe_assemblyai;
 use crate::transcribe_groq;
@@ -116,7 +117,7 @@ impl Recorder {
         log::info!("State: Recording → Transcribing");
 
         let started = Instant::now();
-        let result = self.process_recording(settings, app_dir).await;
+        let result = self.process_recording(app, settings, app_dir).await;
 
         {
             let mut state = self.state.lock().unwrap();
@@ -146,6 +147,7 @@ impl Recorder {
 
     async fn process_recording(
         &self,
+        app: &AppHandle,
         settings: &Settings,
         app_dir: &PathBuf,
     ) -> Result<String, String> {
@@ -179,21 +181,45 @@ impl Recorder {
         let raw_text = transcription?;
         log::debug!("Raw transcription: {:?}", raw_text);
 
-        let mut cleaned = cleanup_text(&raw_text);
-        if cleaned.is_empty() {
+        let mut text = cleanup_text(&raw_text);
+        if text.is_empty() {
             log::warn!("Transcription is empty, nothing to paste");
-            return Ok(cleaned);
+            return Ok(text);
         }
-        log::info!("Transcribed text: {}", cleaned);
+        log::info!("Transcribed text: {}", text);
+
+        // A failed post-processing never loses the dictation: the text is
+        // pasted as transcribed and the error is shown afterwards
+        let mut post_process_error = None;
+        if settings.post_process.enabled {
+            match postprocess::process(settings, &text).await {
+                Ok(edited) => {
+                    log::info!("Post-processed text: {}", edited);
+                    text = edited;
+                }
+                Err(e) => {
+                    log::error!("Post-processing failed, pasting the text as transcribed: {}", e);
+                    post_process_error = Some(e);
+                }
+            }
+        }
+
         // So the next dictation doesn't stick to this one
         if settings.append_space {
-            cleaned.push(' ');
+            text.push(' ');
         }
 
-        paste_text(&cleaned)?;
+        paste_text(&text)?;
         log::info!("Text pasted into the active window");
 
-        Ok(cleaned)
+        if let Some(e) = post_process_error {
+            notify_error(
+                app,
+                &format!("Post-processing failed, the text was pasted as transcribed: {}", e),
+            );
+        }
+
+        Ok(text)
     }
 }
 

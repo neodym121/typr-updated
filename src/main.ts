@@ -4,6 +4,13 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enhanceSelect, syncSelect } from "./dropdown";
 import { getLanguage, setLanguage, t, type Lang, type MessageKey } from "./i18n";
+import {
+  fillPostProcess,
+  initPostProcess,
+  showPostProcess,
+  translatePostProcess,
+  type PostProcessSettings,
+} from "./postprocess";
 
 interface Settings {
   microphone: string;
@@ -24,6 +31,7 @@ interface Settings {
   showIndicator: boolean;
   /** "en", "ru", or empty to follow the system */
   language: string;
+  postProcess: PostProcessSettings;
   developerMode: boolean;
 }
 
@@ -153,6 +161,7 @@ const sections = document.querySelectorAll<HTMLElement>(".content-section");
 function showSection(name: string) {
   navItems.forEach((n) => n.classList.toggle("active", n.dataset.section === name));
   sections.forEach((s) => s.classList.toggle("active", s.id === `section-${name}`));
+  if (name === "postprocess") showPostProcess();
   if (name === "developer") {
     unseenErrors = 0;
     updateDevBadge();
@@ -190,6 +199,8 @@ const ASSEMBLYAI_MODELS = ["universal-3-5-pro", "universal-2"];
 // App-styled lists instead of the browser's native <select> popup
 [micSelect, groqModel, assemblyaiModel].forEach(enhanceSelect);
 
+initPostProcess({ settings: () => currentSettings, save: saveQuietly });
+
 // The window stays hidden until its language is known (see .i18n-pending);
 // the timeout makes sure a failed startup never leaves it blank
 function revealInterface() {
@@ -208,6 +219,7 @@ function applyLanguage(lang: Lang) {
   renderStatus();
   renderMicOptions();
   updateLogMeta();
+  translatePostProcess();
 }
 
 function formatKeyForDisplay(key: string): string {
@@ -301,6 +313,9 @@ async function loadSettings() {
   // Hotkey
   displayHotkey(currentSettings.hotkey);
   appendSpaceToggle.checked = Boolean(currentSettings.appendSpace);
+
+  // Post-processing
+  fillPostProcess();
 
   uiLog("debug", `Settings loaded, ${microphones.length} microphone(s) available`);
 }
