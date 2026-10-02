@@ -17,19 +17,21 @@ pub mod download;
 pub mod ffi;
 pub mod hardware;
 pub mod runtime;
+pub mod worker;
 
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use catalog::{Backend, ModelSpec, MODELS, RUNTIME};
 use download::{DownloadError, Expected};
-use ffi::{Api, Device, Loaded};
 use hardware::{Gpu, Hardware};
 use runtime::Paths;
+use worker::{Worker, WorkerError};
 
 /// Download progress, payload [`DownloadProgress`]
 pub const DOWNLOAD_EVENT: &str = "local-download";
@@ -64,38 +66,11 @@ fn megabytes(bytes: u64) -> u64 {
     bytes / (1024 * 1024)
 }
 
-/// "vulkan" → "Vulkan", "cpu" → "CPU"
-fn backend_label(name: &str) -> String {
-    Backend::parse(&name.to_ascii_lowercase())
-        .map(|b| b.label().to_string())
-        .unwrap_or_else(|| name.to_string())
-}
-
-struct Runtime {
-    api: &'static Api,
-    devices: Vec<Device>,
-}
-
-impl Runtime {
-    /// The device for `backend`: a discrete GPU before an integrated one
-    fn device(&self, backend: Backend) -> Option<&Device> {
-        self.devices
-            .iter()
-            .filter(|d| d.kind == backend.id())
-            .min_by_key(|d| match d.device_type {
-                ffi::DEVICE_TYPE_GPU => 0,
-                ffi::DEVICE_TYPE_IGPU => 1,
-                ffi::DEVICE_TYPE_CPU => 2,
-                _ => 3,
-            })
-    }
-}
-
 struct LoadedModel {
     spec: &'static ModelSpec,
     /// The backend that was asked for (the model may have fallen back to the CPU)
     requested: Backend,
-    loaded: Loaded,
+    worker: Worker,
 }
 
 /// The model in memory, as the UI shows it.
@@ -151,8 +126,6 @@ pub struct BackendStatus {
 pub struct RuntimeStatus {
     pub size: u64,
     pub installed: bool,
-    /// Loaded in this process (it can't be deleted until a restart)
-    pub in_use: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -178,28 +151,38 @@ struct Inner {
     paths: Paths,
     app: OnceLock<AppHandle>,
     hardware: OnceLock<Hardware>,
-    /// Loaded runtime; set once and never unloaded
-    runtime: Mutex<Option<Arc<Runtime>>>,
+    /// Started as the recognition process (Typr's own executable)
+    worker_exe: PathBuf,
     /// The model in memory, locked for the whole of a load or a run
     model: Mutex<Option<LoadedModel>>,
     /// Copy of `model` for the UI, readable while a load runs
     view: Mutex<Option<LoadedView>>,
     /// Bumped at every dictation; a pending unload fires only if unchanged
     generation: AtomicU64,
+    /// Why the GPU's recognition process crashed: the CPU is used until the
+    /// acceleration setting changes
+    gpu_crash: Mutex<Option<String>>,
     downloads: Mutex<HashMap<String, Arc<DownloadJob>>>,
 }
 
 impl LocalEngine {
     pub fn new(paths: Paths) -> Self {
+        let exe = std::env::current_exe().unwrap_or_default();
+        Self::with_worker_exe(paths, exe)
+    }
+
+    /// `exe` runs the recognition process (`exe --local-recognition`)
+    pub fn with_worker_exe(paths: Paths, exe: PathBuf) -> Self {
         Self {
             inner: Arc::new(Inner {
                 paths,
                 app: OnceLock::new(),
                 hardware: OnceLock::new(),
-                runtime: Mutex::new(None),
+                worker_exe: exe,
                 model: Mutex::new(None),
                 view: Mutex::new(None),
                 generation: AtomicU64::new(0),
+                gpu_crash: Mutex::new(None),
                 downloads: Mutex::new(HashMap::new()),
             }),
         }
@@ -224,10 +207,6 @@ impl LocalEngine {
 
     fn paths(&self) -> &Paths {
         &self.inner.paths
-    }
-
-    fn runtime_loaded(&self) -> bool {
-        lock(&self.inner.runtime).is_some()
     }
 
     // ── Status ───────────────────────────────────────────
@@ -268,7 +247,6 @@ impl LocalEngine {
             runtime: RuntimeStatus {
                 size: RUNTIME.size,
                 installed: runtime::is_runtime_installed(paths),
-                in_use: self.runtime_loaded(),
             },
             loaded: lock(&self.inner.view).clone(),
             downloads,
@@ -276,53 +254,12 @@ impl LocalEngine {
         }
     }
 
-    // ── Runtime and model ────────────────────────────────
+    // ── Model ────────────────────────────────────────────
 
-    fn ensure_runtime(&self) -> Result<Arc<Runtime>, String> {
-        let mut runtime = lock(&self.inner.runtime);
-        if let Some(loaded) = runtime.as_ref() {
-            return Ok(loaded.clone());
-        }
-        if !is_supported() {
-            return Err("Local recognition is available on 64-bit Windows only".to_string());
-        }
-        if !runtime::is_runtime_installed(self.paths()) {
-            return Err(
-                "The local recognition components aren't downloaded yet. Download them in Engine → Local"
-                    .to_string(),
-            );
-        }
-
-        let started = Instant::now();
-        let dir = self.paths().runtime_dir();
-        runtime::read_contract(&dir)?;
-        let api = Api::open(&dir)?;
-        let devices = api.devices();
-        log::info!(
-            "transcribe.cpp runtime loaded in {} ms, devices: {}",
-            started.elapsed().as_millis(),
-            devices
-                .iter()
-                .map(|d| format!("{} [{}] {} ({} MB)", d.name, d.kind, d.description.trim(), megabytes(d.memory_total)))
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-        let loaded = Arc::new(Runtime { api, devices });
-        *runtime = Some(loaded.clone());
-        drop(runtime);
-        self.notify_changed();
-        Ok(loaded)
-    }
-
-    /// Makes `spec` the model in memory, on `backend`. Falls back to the
-    /// CPU when the GPU backend can't take it, so a dictation still works.
-    fn ensure_model(
-        &self,
-        slot: &mut Option<LoadedModel>,
-        runtime: &Runtime,
-        spec: &'static ModelSpec,
-        backend: Backend,
-    ) -> Result<(), String> {
+    /// Makes `spec` the model in memory, on `backend`: starts a recognition
+    /// process with it. The process falls back to the CPU itself when the
+    /// GPU can't take the model; if it crashes on the GPU, a CPU one starts.
+    fn ensure_model(&self, slot: &mut Option<LoadedModel>, spec: &'static ModelSpec, backend: Backend) -> Result<(), String> {
         if let Some(current) = slot.as_ref() {
             if current.spec.id == spec.id && current.requested == backend {
                 return Ok(());
@@ -330,87 +267,93 @@ impl LocalEngine {
         }
         self.free_model(slot, "another model or backend was chosen");
 
+        if !is_supported() {
+            return Err("Local recognition is available on 64-bit Windows only".to_string());
+        }
         if !runtime::is_model_installed(self.paths(), spec) {
             return Err(format!(
                 "{} isn't downloaded yet. Download it in Engine → Local",
                 spec.name
             ));
         }
-        let path = self.paths().model_file(spec);
+        if !runtime::is_runtime_installed(self.paths()) {
+            // They come with the first model; fetch them again if they went missing
+            if let Err(e) = self.download_runtime() {
+                log::debug!("Components not downloaded: {}", e);
+            }
+            return Err(
+                "The local recognition components are being downloaded. Try again in a moment"
+                    .to_string(),
+            );
+        }
 
         let started = Instant::now();
-        let (loaded, fallback) = self.load_with_fallback(runtime, &path, backend)?;
-
-        // The device's kind ("vulkan"), not its name ("Vulkan0")
-        let placed = runtime.api.device_of(&loaded);
-        let actual = backend_label(
-            &placed
-                .as_ref()
-                .map(|d| d.kind.clone())
-                .unwrap_or_else(|| runtime.api.backend_of(&loaded)),
-        );
-        let device = placed
-            .map(|d| if d.description.trim().is_empty() { d.name } else { d.description })
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let crash = if backend == Backend::Cpu {
+            None
+        } else {
+            lock(&self.inner.gpu_crash).clone()
+        };
+        let worker = match crash {
+            Some(reason) => self.start_on_cpu(spec, reason)?,
+            None => match self.start_worker(spec, backend) {
+                Err(WorkerError::Crashed(reason)) if backend != Backend::Cpu => {
+                    log::error!("Loading {} on {} crashed: {}", spec.name, backend.label(), reason);
+                    let reason = format!("{} crashed ({})", backend.label(), reason);
+                    *lock(&self.inner.gpu_crash) = Some(reason.clone());
+                    self.start_on_cpu(spec, reason)?
+                }
+                other => other.map_err(|e| e.message().to_string())?,
+            },
+        };
+        let placement = worker.placement().clone();
         log::info!(
             "{} loaded on {} ({}) in {} ms",
             spec.name,
-            actual,
-            device,
+            placement.backend,
+            placement.device,
             started.elapsed().as_millis()
         );
-
         *lock(&self.inner.view) = Some(LoadedView {
             model: spec.id.to_string(),
             name: spec.name.to_string(),
-            backend: actual,
-            device,
-            fallback,
+            backend: placement.backend,
+            device: placement.device,
+            fallback: placement.fallback,
         });
         *slot = Some(LoadedModel {
             spec,
             requested: backend,
-            loaded,
+            worker,
         });
         self.notify_changed();
         Ok(())
     }
 
-    fn load_with_fallback(
-        &self,
-        runtime: &Runtime,
-        path: &std::path::Path,
-        backend: Backend,
-    ) -> Result<(Loaded, Option<String>), String> {
-        let cpu = || {
-            runtime
-                .api
-                .load_model(path, Backend::Cpu, runtime.device(Backend::Cpu))
-                .map_err(|e| e.message)
-        };
-        if backend == Backend::Cpu {
-            return Ok((cpu()?, None));
-        }
-        let reason = match runtime.device(backend) {
-            None => format!("{} found no device", backend.label()),
-            Some(device) => match runtime.api.load_model(path, backend, Some(device)) {
-                Ok(loaded) => return Ok((loaded, None)),
-                Err(e) => e.message,
-            },
-        };
-        log::warn!("{}; loading the model on the CPU instead", reason);
-        Ok((cpu()?, Some(reason)))
+    fn start_worker(&self, spec: &ModelSpec, backend: Backend) -> Result<Worker, WorkerError> {
+        Worker::start(
+            &self.inner.worker_exe,
+            &self.paths().runtime_dir(),
+            &self.paths().model_file(spec),
+            backend,
+        )
     }
 
+    /// A CPU process in place of a GPU one that crashed; the reason shows
+    /// in the UI
+    fn start_on_cpu(&self, spec: &ModelSpec, reason: String) -> Result<Worker, String> {
+        let mut worker = self
+            .start_worker(spec, Backend::Cpu)
+            .map_err(|e| e.message().to_string())?;
+        worker.set_fallback(reason);
+        Ok(worker)
+    }
+
+    /// Ends the recognition process, which frees everything it loaded.
     fn free_model(&self, slot: &mut Option<LoadedModel>, reason: &str) {
         let Some(current) = slot.take() else {
             return;
         };
-        if let Some(runtime) = lock(&self.inner.runtime).as_ref() {
-            runtime.api.free(current.loaded);
-        }
+        drop(current.worker);
         *lock(&self.inner.view) = None;
         log::info!("{} unloaded from memory ({})", current.spec.name, reason);
         self.notify_changed();
@@ -422,51 +365,53 @@ impl LocalEngine {
             .expect("the default model is in the catalog")
     }
 
-    /// Loads the chosen model (and the runtime) if needed. Blocking.
+    /// Loads the chosen model if needed. Blocking.
     fn prepare(&self, model: &str, backend_choice: &str) -> Result<(), String> {
         let backend = self.hardware().resolve(backend_choice);
         let spec = Self::model_for(model);
-        let runtime = self.ensure_runtime()?;
         let mut slot = lock(&self.inner.model);
-        self.ensure_model(&mut slot, &runtime, spec, backend)
+        self.ensure_model(&mut slot, spec, backend)
     }
 
     fn transcribe_blocking(&self, model: &str, backend_choice: &str, samples: &[f32]) -> Result<String, String> {
         let backend = self.hardware().resolve(backend_choice);
         let spec = Self::model_for(model);
-        let runtime = self.ensure_runtime()?;
         let mut slot = lock(&self.inner.model);
-        self.ensure_model(&mut slot, &runtime, spec, backend)?;
+        self.ensure_model(&mut slot, spec, backend)?;
 
-        let started = Instant::now();
         let current = slot.as_mut().expect("ensure_model leaves a model loaded");
-        let result = match runtime.api.transcribe(&mut current.loaded, samples) {
-            Err(e) if e.is_backend_failure() && backend != Backend::Cpu => {
-                // The library's advice: reload on the CPU and retry
-                log::warn!("{} failed during transcription ({}), retrying on the CPU", backend.label(), e);
-                self.free_model(&mut slot, "GPU failure");
-                self.ensure_model(&mut slot, &runtime, spec, Backend::Cpu)?;
+        let result = current.worker.transcribe(samples);
+        let placement = current.worker.placement().clone();
+        match result {
+            Ok(text) => {
+                // The process may have moved the model to the CPU
+                if let Some(view) = lock(&self.inner.view).as_mut() {
+                    if view.backend != placement.backend || view.fallback != placement.fallback {
+                        view.backend = placement.backend;
+                        view.device = placement.device;
+                        view.fallback = placement.fallback;
+                        self.notify_changed();
+                    }
+                }
+                Ok(text)
+            }
+            Err(WorkerError::Failed(message)) => Err(message),
+            Err(WorkerError::Crashed(reason)) => {
+                self.free_model(&mut slot, "the recognition process stopped");
+                if placement.backend == Backend::Cpu.label() {
+                    return Err(format!("Local recognition stopped unexpectedly: {}", reason));
+                }
+                log::error!(
+                    "{} crashed during transcription: {}; retrying on the CPU",
+                    placement.backend,
+                    reason
+                );
+                *lock(&self.inner.gpu_crash) = Some(format!("{} crashed ({})", placement.backend, reason));
+                self.ensure_model(&mut slot, spec, backend)?;
                 let current = slot.as_mut().expect("ensure_model leaves a model loaded");
-                runtime.api.transcribe(&mut current.loaded, samples)
+                current.worker.transcribe(samples).map_err(|e| e.message().to_string())
             }
-            other => other,
-        };
-        let transcript = result.map_err(|e| e.message)?;
-
-        log::info!(
-            "Local transcription took {} ms for {:.1} s of audio{}",
-            started.elapsed().as_millis(),
-            samples.len() as f32 / crate::audio::TARGET_SAMPLE_RATE as f32,
-            if transcript.language.is_empty() {
-                String::new()
-            } else {
-                format!(" (language: {})", transcript.language)
-            }
-        );
-        if let Some(warning) = transcript.warning {
-            log::warn!("The transcript may be incomplete: {}", warning);
         }
-        Ok(transcript.text)
     }
 
     /// Transcribes 16 kHz mono samples with the model chosen in settings.
@@ -534,6 +479,10 @@ impl LocalEngine {
     pub fn settings_changed(&self, old: &crate::settings::Settings, new: &crate::settings::Settings) {
         let was_local = old.engine == "local";
         let is_local = new.engine == "local";
+        if old.local_backend != new.local_backend {
+            // A new choice gets a fresh try on the GPU
+            *lock(&self.inner.gpu_crash) = None;
+        }
         if was_local && !is_local {
             self.unload("another engine was chosen");
         } else if old.local_model != new.local_model || old.local_backend != new.local_backend {
@@ -729,9 +678,12 @@ impl LocalEngine {
         Ok(())
     }
 
+    /// Blocking: waits for a running dictation, then ends the recognition
+    /// process that uses the runtime.
     pub fn delete_runtime(&self) -> Result<(), String> {
-        if self.runtime_loaded() {
-            return Err("These components are in use. Restart Typr to delete them".to_string());
+        {
+            let mut slot = lock(&self.inner.model);
+            self.free_model(&mut slot, "the components were deleted");
         }
         runtime::remove_runtime(self.paths())?;
         log::info!("Runtime deleted");
@@ -754,13 +706,6 @@ mod tests {
     }
 
     #[test]
-    fn test_backend_label() {
-        assert_eq!(backend_label("vulkan"), "Vulkan");
-        assert_eq!(backend_label("cpu"), "CPU");
-        assert_eq!(backend_label("metal"), "metal");
-    }
-
-    #[test]
     fn test_status_of_an_empty_install() {
         let root = std::env::temp_dir().join("typr_test_local_status");
         let _ = std::fs::remove_dir_all(&root);
@@ -768,58 +713,12 @@ mod tests {
         let status = engine.status();
         assert_eq!(status.models.len(), MODELS.len());
         assert!(status.models.iter().all(|m| !m.installed));
-        assert!(!status.runtime.installed && !status.runtime.in_use);
+        assert!(!status.runtime.installed);
         assert_eq!(status.runtime.size, RUNTIME.size);
         assert!(status.loaded.is_none());
         assert_eq!(status.backends.len(), 2);
         let cpu = status.backends.iter().find(|b| b.id == Backend::Cpu).unwrap();
         assert!(cpu.available);
-    }
-
-    /// Downloads the runtime and Parakeet into the real app folder
-    /// and transcribes a 16 kHz mono WAV given in TYPR_TEST_WAV:
-    /// `cargo test real_local_transcription -- --ignored --nocapture`
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore]
-    async fn real_local_transcription() {
-        crate::logger::init();
-        crate::logger::set_enabled(true);
-        let wav = std::env::var("TYPR_TEST_WAV").expect("set TYPR_TEST_WAV to a 16 kHz mono WAV");
-        let mut reader = hound::WavReader::open(&wav).unwrap();
-        let samples: Vec<f32> = reader
-            .samples::<i16>()
-            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
-            .collect();
-
-        let engine = LocalEngine::new(Paths::new(Paths::default_root()));
-        let spec = catalog::model(catalog::DEFAULT_MODEL).unwrap();
-        if !runtime::is_runtime_installed(engine.paths()) {
-            let job = engine.start_job("runtime").unwrap();
-            engine.fetch_runtime(&job).await.unwrap();
-        }
-        if !runtime::is_model_installed(engine.paths(), spec) {
-            let job = engine.start_job("model:test").unwrap();
-            engine.fetch_model(&job, spec).await.unwrap();
-        }
-
-        for backend in ["vulkan", "cpu"] {
-            let engine = engine.clone();
-            let samples = samples.clone();
-            let text = tokio::task::spawn_blocking(move || {
-                let first = Instant::now();
-                let text = engine.transcribe_blocking(spec.id, backend, &samples).unwrap();
-                println!("{} (load + run): {} ms", backend, first.elapsed().as_millis());
-                let warm = Instant::now();
-                engine.transcribe_blocking(spec.id, backend, &samples).unwrap();
-                println!("{} (warm run): {} ms", backend, warm.elapsed().as_millis());
-                println!("view: {:?}", lock(&engine.inner.view));
-                text
-            })
-            .await
-            .unwrap();
-            println!("{}: {}", backend, text);
-            assert!(text.to_lowercase().contains("country"), "{}", text);
-        }
     }
 
     #[test]
@@ -831,7 +730,7 @@ mod tests {
             .transcribe_blocking(catalog::DEFAULT_MODEL, "cpu", &[0.0; 16000])
             .unwrap_err();
         if is_supported() {
-            assert!(error.contains("aren't downloaded yet"), "{}", error);
+            assert!(error.contains("isn't downloaded yet"), "{}", error);
         }
     }
 }

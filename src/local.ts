@@ -27,7 +27,6 @@ interface BackendStatus {
 interface RuntimeStatus {
   size: number;
   installed: boolean;
-  inUse: boolean;
 }
 
 interface Gpu {
@@ -94,6 +93,9 @@ const fallbackLine = document.getElementById("local-fallback")!;
 const runtimeHint = document.getElementById("local-runtime-hint")!;
 const runtimeActions = document.getElementById("local-runtime-actions")!;
 const runtimeError = document.getElementById("local-runtime-error")!;
+const runtimeProblem = document.getElementById("local-runtime-problem")!;
+const runtimeProblemText = document.getElementById("local-runtime-problem-text")!;
+const runtimeRetry = document.getElementById("local-runtime-retry")!;
 const unloadSelect = document.getElementById("local-unload") as HTMLSelectElement;
 
 let host: LocalHost | undefined;
@@ -182,11 +184,17 @@ function updateInPlace(progress: DownloadProgress): boolean {
   return true;
 }
 
-/** A delete button that asks "Delete?" before it acts */
+const TRASH_ICON =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M2.75 4.25h10.5M6.25 4.25V3a.75.75 0 01.75-.75h2a.75.75 0 01.75.75v1.25' +
+  'M4.25 4.25l.6 8.4a1 1 0 001 .93h4.3a1 1 0 001-.93l.6-8.4M6.75 7v4M9.25 7v4" ' +
+  'stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+/** A trash button that asks "Delete?" before it acts */
 function deleteButton(key: string, onConfirm: () => void): HTMLButtonElement {
   const waiting = confirming.has(key);
-  return button(
-    t(waiting ? "local.confirmDelete" : "local.delete"),
+  const el = button(
+    waiting ? t("local.confirmDelete") : "",
     () => {
       if (confirming.has(key)) {
         confirming.delete(key);
@@ -199,8 +207,14 @@ function deleteButton(key: string, onConfirm: () => void): HTMLButtonElement {
         if (confirming.delete(key)) render();
       }, CONFIRM_TIMEOUT);
     },
-    waiting ? "danger" : "",
+    waiting ? "danger" : "btn-icon",
   );
+  if (!waiting) {
+    el.innerHTML = TRASH_ICON;
+    el.title = t("local.delete");
+    el.setAttribute("aria-label", t("local.delete"));
+  }
+  return el;
 }
 
 // ── Choices ──────────────────────────────────────────
@@ -340,10 +354,7 @@ function renderRuntime() {
 
   if (runtime.installed) {
     runtimeHint.textContent = `${describe} · ${t("local.installed")}`;
-    // Loaded in this process, its files can't be deleted until a restart
-    if (!runtime.inUse) {
-      runtimeActions.append(deleteButton(RUNTIME_KEY, () => void deleteRuntime()));
-    }
+    runtimeActions.append(deleteButton(RUNTIME_KEY, () => void deleteRuntime()));
   } else {
     runtimeHint.textContent = `${describe} · ${formatSize(runtime.size)}`;
     runtimeActions.append(button(t("local.download"), () => void downloadRuntime()));
@@ -356,12 +367,28 @@ function renderRuntime() {
   }
 }
 
+/** The components live in the Developer section; the Local tab speaks up
+ *  only when a downloaded model can't run without them. */
+function renderRuntimeProblem() {
+  if (!status) return;
+  const error = errors.get(RUNTIME_KEY);
+  const needed = error !== undefined || status.models.some((m) => m.installed);
+  const show = status.supported && !status.runtime.installed && !downloads.has(RUNTIME_KEY) && needed;
+  runtimeProblem.classList.toggle("hidden", !show);
+  if (!show) return;
+  runtimeProblemText.textContent = error
+    ? t("local.runtimeFailed", { error })
+    : t("local.runtimeMissing", { size: formatSize(status.runtime.size) });
+  runtimeRetry.textContent = t(error ? "local.retry" : "local.download");
+}
+
 function render() {
   if (!host || !status) return;
   unsupportedNote.classList.toggle("hidden", status.supported);
   renderModels();
   renderBackends();
   renderRuntime();
+  renderRuntimeProblem();
 }
 
 // ── Actions ──────────────────────────────────────────
@@ -489,6 +516,8 @@ export function initLocal(appHost: LocalHost) {
     host!.save();
   });
 
+  runtimeRetry.addEventListener("click", () => void downloadRuntime());
+
   listen<DownloadProgress>("local-download", (event) => onProgress(event.payload));
   listen("local-changed", () => scheduleRefresh());
 }
@@ -504,6 +533,11 @@ export function fillLocal() {
 /** The Local tab was opened: show fresh status. */
 export function showLocal() {
   if (host && !panel.classList.contains("hidden")) void refresh();
+}
+
+/** The Developer section, with the components row, was opened. */
+export function showLocalComponents() {
+  if (host) void refresh();
 }
 
 /** Texts set from code, after a language switch. */

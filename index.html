@@ -145,6 +145,11 @@
             <p id="local-unsupported" class="local-note hidden" data-i18n="local.unsupported">Local recognition works on 64-bit Windows only</p>
             <h2 class="group-title" data-i18n="local.models">Models</h2>
             <p class="group-hint" data-i18n="local.modelsHint">Downloaded once and run on this computer. The audio never leaves it</p>
+            <!-- The engine components come with the first model; shown only when they failed -->
+            <div id="local-runtime-problem" class="local-problem hidden">
+              <span class="local-error" id="local-runtime-problem-text"></span>
+              <button type="button" class="btn btn-secondary btn-compact" id="local-runtime-retry">Retry</button>
+            </div>
             <div id="local-model-list" class="card"></div>
 
             <h2 class="group-title" data-i18n="local.performance">Performance</h2>
@@ -161,14 +166,6 @@
                     <button type="button" class="segment" data-backend="cpu" data-i18n="local.cpu">CPU</button>
                   </div>
                 </div>
-              </div>
-              <div class="setting-row">
-                <div class="setting-label">
-                  <span class="label-text" data-i18n="local.components">Engine components</span>
-                  <span class="label-hint" id="local-runtime-hint"></span>
-                  <span class="local-error hidden" id="local-runtime-error"></span>
-                </div>
-                <div class="setting-control local-actions" id="local-runtime-actions"></div>
               </div>
               <div class="setting-row">
                 <div class="setting-label">
@@ -444,6 +441,17 @@
             <h1 class="section-title" data-i18n="developer.title">Developer</h1>
             <p class="section-desc" data-i18n="developer.desc">Live log of everything Typr does: hotkeys, audio, requests, errors</p>
           </header>
+          <!-- Local recognition files (src/local.ts) -->
+          <div class="card dev-card">
+            <div class="setting-row">
+              <div class="setting-label">
+                <span class="label-text" data-i18n="local.components">Local recognition components</span>
+                <span class="label-hint" id="local-runtime-hint"></span>
+                <span class="local-error hidden" id="local-runtime-error"></span>
+              </div>
+              <div class="setting-control local-actions" id="local-runtime-actions"></div>
+            </div>
+          </div>
           <div class="log-toolbar">
             <div class="segmented" id="log-levels">
               <button type="button" class="segment active" data-level="all"><span data-i18n="developer.all">All</span> <span class="count" data-count="all">0</span></button>

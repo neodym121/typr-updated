@@ -301,7 +301,11 @@ async fn local_delete_model(engine: State<'_, LocalEngine>, id: String) -> Resul
 
 #[tauri::command]
 async fn local_delete_runtime(engine: State<'_, LocalEngine>) -> Result<(), String> {
-    engine.delete_runtime()
+    // Waits for a running dictation to release the model
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || engine.delete_runtime())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -503,6 +507,11 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), Strin
 }
 
 fn main() {
+    // Started by Typr itself to run a local model (local/worker.rs)
+    if std::env::args().nth(1).as_deref() == Some(typr_lib::local::worker::ARG) {
+        std::process::exit(typr_lib::local::worker::run());
+    }
+
     logger::init();
 
     let app_dir = get_app_dir();

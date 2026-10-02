@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enhanceSelect, syncSelect } from "./dropdown";
 import { getLanguage, setLanguage, t, type Lang, type MessageKey } from "./i18n";
-import { fillLocal, initLocal, showLocal, translateLocal } from "./local";
+import { fillLocal, initLocal, showLocal, showLocalComponents, translateLocal } from "./local";
 import {
   fillPostProcess,
   initPostProcess,
@@ -172,6 +172,7 @@ function showSection(name: string) {
   if (name === "postprocess") showPostProcess();
   if (name === "engine") showLocal();
   if (name === "developer") {
+    showLocalComponents();
     unseenErrors = 0;
     updateDevBadge();
     scrollLogsToBottom();

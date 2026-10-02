@@ -4,7 +4,7 @@
 //! Every download is pinned to an exact file with its size and SHA-256, so a
 //! changed or broken file is never installed.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// transcribe.cpp version whose C API `ffi.rs` mirrors. The runtime must be
 /// this exact version (checked through its contract.json).
@@ -13,7 +13,7 @@ pub const TRANSCRIBE_VERSION: &str = "0.2.4";
 pub const HEADER_HASH: &str = "7df72bf9e667b8c2";
 
 /// Where a speech model runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     Vulkan,
