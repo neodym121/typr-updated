@@ -64,13 +64,13 @@ async fn transcribes_in_the_recognition_process() {
     for backend in ["vulkan", "cpu"] {
         let cold = Instant::now();
         let text = engine
-            .transcribe(catalog::DEFAULT_MODEL, backend, samples.clone())
+            .transcribe(catalog::DEFAULT_MODEL, backend, None, samples.clone())
             .await
             .unwrap();
         println!("{} (start + load + run): {} ms", backend, cold.elapsed().as_millis());
         let warm = Instant::now();
         engine
-            .transcribe(catalog::DEFAULT_MODEL, backend, samples.clone())
+            .transcribe(catalog::DEFAULT_MODEL, backend, None, samples.clone())
             .await
             .unwrap();
         println!("{} (warm run): {} ms", backend, warm.elapsed().as_millis());

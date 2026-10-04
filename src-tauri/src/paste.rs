@@ -70,6 +70,53 @@ pub fn paste_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Puts `text` on the clipboard and leaves it there (kept out of the
+/// clipboard history), for when there is no window to paste into.
+pub fn copy_text(text: &str) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("Clipboard is unavailable: {}", e))?;
+    set_text_quietly(&mut clipboard, text).map_err(|e| format!("Failed to copy the text: {}", e))
+}
+
+/// The window in front now, where a paste lands (0 if none).
+pub fn foreground_window() -> isize {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        unsafe { GetForegroundWindow() as isize }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        0
+    }
+}
+
+/// Brings `window` (from `foreground_window`) back to the front. False when
+/// it no longer exists or Windows refused.
+pub fn focus_window(window: isize) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
+        let hwnd = window as windows_sys::Win32::Foundation::HWND;
+        if window == 0 || unsafe { IsWindow(hwnd) } == 0 {
+            return false;
+        }
+        unsafe {
+            if IsIconic(hwnd) != 0 {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+            SetForegroundWindow(hwnd) != 0
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        false
+    }
+}
+
 fn save(clipboard: &mut arboard::Clipboard) -> Saved {
     if let Ok(text) = clipboard.get_text() {
         return Saved::Text(text);

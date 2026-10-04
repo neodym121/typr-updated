@@ -12,7 +12,6 @@
   </head>
   <body>
     <div id="app">
-      <div id="titlebar" data-tauri-drag-region></div>
       <div id="app-body">
       <aside id="sidebar">
         <div class="sidebar-header">
@@ -64,7 +63,8 @@
           </button>
         </nav>
         <div class="sidebar-footer">
-          <span class="version-text" id="version-text">v1.3.0</span>
+          <span class="version-text" id="version-text">v2.0.0</span>
+          <button type="button" class="update-link hidden" id="update-link"></button>
         </div>
       </aside>
 
@@ -108,10 +108,44 @@
                 </div>
               </div>
             </div>
+            <div class="setting-row">
+              <div class="setting-label">
+                <label class="label-text" for="autostart-toggle" data-i18n="general.autostart">Start with Windows</label>
+                <span class="label-hint" data-i18n="general.autostartHint">Typr starts in the tray when you sign in</span>
+              </div>
+              <div class="setting-control">
+                <label class="switch">
+                  <input type="checkbox" id="autostart-toggle" role="switch" />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-label">
+                <label class="label-text" for="updates-toggle" data-i18n="general.updates">Check for updates</label>
+                <span class="label-hint" id="updates-status" data-i18n="general.updatesHint">Looks for new releases on GitHub</span>
+              </div>
+              <div class="setting-control control-group">
+                <button type="button" class="btn btn-secondary btn-compact" id="updates-check" data-i18n="general.updatesCheck">Check now</button>
+                <label class="switch">
+                  <input type="checkbox" id="updates-toggle" role="switch" checked />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <h2 class="group-title" data-i18n="general.advanced">Advanced</h2>
           <div class="card">
+            <div class="setting-row">
+              <div class="setting-label">
+                <span class="label-text" data-i18n="general.setup">Setup wizard</span>
+                <span class="label-hint" data-i18n="general.setupHint">Go through the first-run setup again</span>
+              </div>
+              <div class="setting-control">
+                <button type="button" class="btn btn-secondary btn-compact" id="setup-run" data-i18n="general.setupRun">Open</button>
+              </div>
+            </div>
             <div class="setting-row">
               <div class="setting-label">
                 <label class="label-text" for="dev-mode-toggle" data-i18n="general.devMode">Developer mode</label>
@@ -298,6 +332,31 @@
               </div>
             </div>
           </div>
+
+          <h2 class="group-title" data-i18n="engine.speech">Speech</h2>
+          <div class="card">
+            <div class="setting-row">
+              <div class="setting-label">
+                <span class="label-text" data-i18n="engine.recognitionLanguage">Language</span>
+                <span class="label-hint" data-i18n="engine.recognitionLanguageHint">The language you dictate in</span>
+              </div>
+              <div class="setting-control">
+                <select id="recognition-language"></select>
+              </div>
+            </div>
+            <div class="setting-row" id="fallback-row">
+              <div class="setting-label">
+                <label class="label-text" for="fallback-toggle" data-i18n="engine.fallback">Local fallback</label>
+                <span class="label-hint" data-i18n="engine.fallbackHint">If the cloud fails, a downloaded local model transcribes the dictation</span>
+              </div>
+              <div class="setting-control">
+                <label class="switch">
+                  <input type="checkbox" id="fallback-toggle" role="switch" checked />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section id="section-recording" class="content-section">
@@ -476,6 +535,22 @@
           </div>
         </section>
       </main>
+      </div>
+
+      <!-- First-run setup (src/setup.ts), over the whole window -->
+      <div id="setup" class="setup hidden" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+        <div class="setup-panel">
+          <header class="setup-head">
+            <img class="app-mark" src="/assets/logo.svg" width="28" height="28" alt="" />
+            <span class="setup-progress" id="setup-progress"></span>
+            <button type="button" class="setup-skip" id="setup-skip" data-i18n="setup.skip">Skip setup</button>
+          </header>
+          <div class="setup-body" id="setup-body"></div>
+          <footer class="setup-foot">
+            <button type="button" class="btn btn-secondary" id="setup-back" data-i18n="setup.back">Back</button>
+            <button type="button" class="btn btn-primary" id="setup-next" data-i18n="setup.next">Next</button>
+          </footer>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

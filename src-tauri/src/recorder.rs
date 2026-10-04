@@ -1,14 +1,14 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
-use crate::audio::{self, AudioRecorder};
+use crate::audio::{self, AudioFormat, AudioRecorder, EncodedAudio};
 use crate::cleanup::cleanup_text;
+use crate::net;
 use crate::overlay::{self, Indicator};
 use crate::paste::paste_text;
 use crate::postprocess;
-use crate::settings::Settings;
+use crate::settings::{Engine, Settings};
 use crate::transcribe_assemblyai;
 use crate::transcribe_groq;
 use crate::transcribe_local;
@@ -44,6 +44,46 @@ pub fn notify_error(app: &AppHandle, message: &str) {
         log::warn!("Failed to emit recording-error: {}", e);
     }
     overlay::flash_error(app);
+}
+
+/// A cloud engine failed and a local model transcribed the dictation instead.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FallbackNotice {
+    /// The cloud engine that failed, e.g. "Groq"
+    pub engine: String,
+    pub error: String,
+}
+
+/// Opens the connections a dictation will need while the user is still
+/// speaking: the cloud engine and, if it is on, post-processing.
+pub fn warm_up_connections(settings: &Settings) {
+    let engine_url = match settings.engine {
+        Engine::Local => None,
+        Engine::Groq => Some(transcribe_groq::HOST.to_string()),
+        Engine::Polza => Some(transcribe_polza::HOST.to_string()),
+        Engine::AssemblyAi => Some(transcribe_assemblyai::HOST.to_string()),
+        Engine::OpenAi => Some(transcribe_openai::transcriptions_url(&settings.openai_endpoint)),
+    };
+    let post_url = settings
+        .post_process
+        .enabled
+        .then(|| postprocess::host(settings.post_process.provider).to_string());
+    // Groq or Polza for both: one connection serves the two requests
+    let mut urls: Vec<String> = engine_url.into_iter().chain(post_url).collect();
+    urls.dedup();
+    for url in urls {
+        net::warm_up(url);
+    }
+}
+
+/// How the recording is packed for `settings.engine`.
+fn upload_format(settings: &Settings) -> AudioFormat {
+    match settings.engine {
+        Engine::Groq => transcribe_groq::FORMAT,
+        Engine::AssemblyAi => transcribe_assemblyai::FORMAT,
+        Engine::Polza => transcribe_polza::FORMAT,
+        Engine::OpenAi | Engine::Local => transcribe_openai::format_for(&settings.openai_endpoint),
+    }
 }
 
 pub struct Recorder {
@@ -107,7 +147,6 @@ impl Recorder {
         &self,
         app: &AppHandle,
         settings: &Settings,
-        app_dir: &PathBuf,
     ) -> Result<String, String> {
         {
             let mut state = self.state.lock().unwrap();
@@ -120,7 +159,7 @@ impl Recorder {
         log::info!("State: Recording → Transcribing");
 
         let started = Instant::now();
-        let result = self.process_recording(app, settings, app_dir).await;
+        let result = self.process_recording(app, settings).await;
 
         {
             let mut state = self.state.lock().unwrap();
@@ -153,7 +192,6 @@ impl Recorder {
         &self,
         app: &AppHandle,
         settings: &Settings,
-        app_dir: &PathBuf,
     ) -> Result<String, String> {
         // The guard is a temporary, released at the end of this statement
         let stop_result = self.audio_recorder.lock().unwrap().stop();
@@ -173,18 +211,10 @@ impl Recorder {
         }
 
         log::info!("Transcribing with engine '{}'", settings.engine);
-        let raw_text = if settings.engine == "local" {
-            transcribe_local::transcribe_local(app, settings, captured.samples).await?
+        let raw_text = if settings.engine == Engine::Local {
+            transcribe_local::transcribe_local(app, settings, &settings.local_model, captured.samples).await?
         } else {
-            let temp_path = app_dir.join("temp_recording.wav");
-            audio::write_wav(&temp_path, &captured)?;
-
-            let transcription = transcribe(settings, &temp_path).await;
-
-            if let Err(e) = std::fs::remove_file(&temp_path) {
-                log::debug!("Could not remove {}: {}", temp_path.display(), e);
-            }
-            transcription?
+            transcribe_cloud(app, settings, captured.samples).await?
         };
         log::debug!("Raw transcription: {:?}", raw_text);
 
@@ -230,39 +260,91 @@ impl Recorder {
     }
 }
 
-async fn transcribe(settings: &Settings, audio_path: &PathBuf) -> Result<String, String> {
-    match settings.engine.as_str() {
-        "groq" => {
-            transcribe_groq::transcribe_groq(&settings.groq_api_key, &settings.groq_model, audio_path)
+/// Sends the recording to the cloud engine. If that fails for any reason
+/// and a local model is downloaded (and the fallback is on), the local model
+/// transcribes it instead; the next dictation tries the cloud again.
+async fn transcribe_cloud(app: &AppHandle, settings: &Settings, samples: Vec<f32>) -> Result<String, String> {
+    let format = upload_format(settings);
+    let (samples, encoded) = tauri::async_runtime::spawn_blocking(move || {
+        let encoded = audio::encode(&samples, format);
+        (samples, encoded)
+    })
+    .await
+    .map_err(|e| format!("Audio encoding stopped unexpectedly: {}", e))?;
+
+    let error = match transcribe(settings, &encoded?).await {
+        Ok(text) => return Ok(text),
+        Err(error) => error,
+    };
+    if !settings.fallback_local {
+        return Err(error);
+    }
+    let Some(model) = transcribe_local::fallback_model(app, settings) else {
+        return Err(error);
+    };
+
+    log::warn!(
+        "{} failed ({}); transcribing with the local model {} instead",
+        settings.engine.label(),
+        error,
+        model
+    );
+    match transcribe_local::transcribe_local(app, settings, model, samples).await {
+        Ok(text) => {
+            let notice = FallbackNotice {
+                engine: settings.engine.label().to_string(),
+                error,
+            };
+            if let Err(e) = app.emit("transcription-fallback", notice) {
+                log::debug!("Failed to emit transcription-fallback: {}", e);
+            }
+            Ok(text)
+        }
+        Err(local_error) => Err(format!(
+            "{}. The local model failed too: {}",
+            error.trim_end_matches('.'),
+            local_error
+        )),
+    }
+}
+
+async fn transcribe(settings: &Settings, audio: &EncodedAudio) -> Result<String, String> {
+    let language = settings.language_hint();
+    match settings.engine {
+        Engine::Groq => {
+            transcribe_groq::transcribe_groq(&settings.groq_api_key, &settings.groq_model, language, audio)
                 .await
         }
-        "openai" | "openai-compatible" => {
+        Engine::OpenAi => {
             transcribe_openai::transcribe_openai(
                 &settings.openai_endpoint,
                 &settings.openai_model,
                 &settings.openai_api_key,
-                audio_path,
+                language,
+                audio,
             )
             .await
         }
-        "polza" => {
+        Engine::Polza => {
             transcribe_polza::transcribe_polza(
                 &settings.polza_api_key,
                 &settings.polza_model,
                 &settings.polza_provider,
-                audio_path,
+                language,
+                audio,
             )
             .await
         }
-        "assemblyai" => {
+        Engine::AssemblyAi => {
             transcribe_assemblyai::transcribe_assemblyai(
                 &settings.assemblyai_api_key,
                 &settings.assemblyai_model,
-                audio_path,
+                language,
+                audio,
             )
             .await
         }
-        other => Err(format!("Unknown engine: {}", other)),
+        Engine::Local => Err("The local engine takes the samples, not a file".to_string()),
     }
 }
 

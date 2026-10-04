@@ -39,7 +39,11 @@ enum Request {
         backend: Backend,
     },
     /// Followed by a frame with the samples
-    Transcribe,
+    Transcribe {
+        /// Language hint such as "ru"; `None` detects it
+        #[serde(default)]
+        language: Option<String>,
+    },
 }
 
 /// Where the model runs.
@@ -222,8 +226,10 @@ impl Worker {
 
     /// Transcribes 16 kHz mono samples. A GPU failure inside the process
     /// moves the model to the CPU there; `placement` then says so.
-    pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, WorkerError> {
-        self.send(&Request::Transcribe)?;
+    pub fn transcribe(&mut self, samples: &[f32], language: Option<&str>) -> Result<String, WorkerError> {
+        self.send(&Request::Transcribe {
+            language: language.map(str::to_string),
+        })?;
         self.send_bytes(&samples_to_bytes(samples))?;
         match self.reply()? {
             Reply::Text { text, placement } => {
@@ -448,10 +454,10 @@ impl Session {
         }
     }
 
-    fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
+    fn transcribe(&mut self, samples: &[f32], language: Option<&str>) -> Result<String, String> {
         let started = Instant::now();
         let loaded = self.loaded.as_mut().ok_or("No model is loaded")?;
-        let transcript = match self.api.transcribe(loaded, samples) {
+        let transcript = match self.api.transcribe(loaded, samples, language) {
             Err(e) if e.is_backend_failure() && self.placement.backend != Backend::Cpu.label() => {
                 // The library's advice: reload on the CPU and retry
                 let gpu = self.placement.backend.clone();
@@ -460,7 +466,7 @@ impl Session {
                 self.load(Backend::Cpu)?;
                 self.placement.fallback = Some(format!("{} failed during transcription: {}", gpu, e));
                 let loaded = self.loaded.as_mut().ok_or("No model is loaded")?;
-                self.api.transcribe(loaded, samples)
+                self.api.transcribe(loaded, samples, language)
             }
             other => other,
         }
@@ -532,12 +538,12 @@ pub fn run() -> i32 {
     loop {
         let reply = match read_request(&mut input) {
             Ok(None) => break,
-            Ok(Some(Request::Transcribe)) => {
+            Ok(Some(Request::Transcribe { language })) => {
                 let samples = read_frame(&mut input)
                     .map_err(|e| e.to_string())
                     .and_then(|frame| frame.ok_or_else(|| "the samples are missing".to_string()))
                     .and_then(|bytes| bytes_to_samples(&bytes));
-                match samples.and_then(|samples| session.transcribe(&samples)) {
+                match samples.and_then(|samples| session.transcribe(&samples, language.as_deref())) {
                     Ok(text) => Reply::Text {
                         text,
                         placement: session.placement.clone(),
@@ -600,6 +606,16 @@ mod tests {
         };
         let json = serde_json::to_vec(&request).unwrap();
         assert_eq!(serde_json::from_slice::<Request>(&json).unwrap(), request);
+
+        let request = Request::Transcribe {
+            language: Some("ru".to_string()),
+        };
+        let json = serde_json::to_vec(&request).unwrap();
+        assert_eq!(serde_json::from_slice::<Request>(&json).unwrap(), request);
+        assert_eq!(
+            serde_json::from_slice::<Request>(br#"{"type":"transcribe"}"#).unwrap(),
+            Request::Transcribe { language: None }
+        );
 
         let reply = Reply::Text {
             text: "Hello".to_string(),

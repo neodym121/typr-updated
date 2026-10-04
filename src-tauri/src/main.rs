@@ -3,22 +3,39 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Manager, State, WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use typr_lib::audio;
+use typr_lib::autostart;
 use typr_lib::i18n;
 use typr_lib::keyboard::HotkeyKeys;
+use typr_lib::links;
 use typr_lib::local::{runtime::Paths as LocalPaths, LocalEngine, LocalStatus};
 use typr_lib::logger::{self, LogEntry};
 use typr_lib::overlay::{self, Placement};
+use typr_lib::paste;
 use typr_lib::postprocess::{self, ModelInfo};
 use typr_lib::recorder::{self, Recorder, RecordingState};
-use typr_lib::settings::Settings;
+use typr_lib::settings::{Engine, PostProvider, RecordingMode, Settings};
+use typr_lib::updates::{self, UpdateInfo};
+
+/// First check a little after startup, then this often
+const UPDATE_CHECK_DELAY: Duration = Duration::from_secs(15);
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+
+/// The text of the last dictation and the window it was pasted into, for
+/// "Paste last dictation" in the tray. Kept in memory only.
+#[derive(Clone)]
+struct LastDictation {
+    text: String,
+    window: isize,
+}
 
 struct AppState {
     recorder: Recorder,
@@ -28,12 +45,23 @@ struct AppState {
     ptt_held: AtomicBool,
     /// Global hotkey listening; switched off from the tray (e.g. while gaming)
     hotkey_enabled: AtomicBool,
+    last_dictation: Mutex<Option<LastDictation>>,
+    /// A newer release found on GitHub
+    update: Mutex<Option<UpdateInfo>>,
 }
 
-/// Tray menu items whose text follows the interface language and the hotkey switch
+/// Tray menu items whose text or state changes while Typr runs
 struct TrayMenu {
+    menu: Menu<tauri::Wry>,
+    open: MenuItem<tauri::Wry>,
+    paste_last: MenuItem<tauri::Wry>,
+    engine: Submenu<tauri::Wry>,
+    engines: Vec<(Engine, CheckMenuItem<tauri::Wry>)>,
     hotkey: CheckMenuItem<tauri::Wry>,
     exit: MenuItem<tauri::Wry>,
+    /// Added at the top of the menu once a newer release is found
+    update: MenuItem<tauri::Wry>,
+    update_shown: AtomicBool,
 }
 
 /// Set while the main window is being re-created, so two quick tray clicks
@@ -42,16 +70,43 @@ static OPENING_MAIN_WINDOW: AtomicBool = AtomicBool::new(false);
 
 fn update_tray_menu(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    let language = i18n::resolve(&state.settings.lock().unwrap().language);
+    let (language, engine) = {
+        let settings = state.settings.lock().unwrap();
+        (i18n::resolve(&settings.language), settings.engine)
+    };
     let enabled = state.hotkey_enabled.load(Ordering::SeqCst);
-    if let Some(tray) = app.try_state::<TrayMenu>() {
-        let _ = tray.hotkey.set_text(i18n::tray_hotkey(language, enabled));
-        let _ = tray.hotkey.set_checked(enabled);
-        let _ = tray.exit.set_text(i18n::tray_exit(language));
+    let has_last = state.last_dictation.lock().unwrap().is_some();
+    let update = state.update.lock().unwrap().clone();
+    let Some(tray) = app.try_state::<TrayMenu>() else {
+        return;
+    };
+    let _ = tray.open.set_text(i18n::tray_open(language));
+    let _ = tray.paste_last.set_text(i18n::tray_paste_last(language));
+    let _ = tray.paste_last.set_enabled(has_last);
+    let _ = tray.engine.set_text(i18n::tray_engine(language));
+    for (item_engine, item) in &tray.engines {
+        let _ = item.set_text(i18n::engine_label(language, *item_engine));
+        let _ = item.set_checked(*item_engine == engine);
+    }
+    let _ = tray.hotkey.set_text(i18n::tray_hotkey(language, enabled));
+    let _ = tray.hotkey.set_checked(enabled);
+    let _ = tray.exit.set_text(i18n::tray_exit(language));
+    if let Some(update) = update {
+        let _ = tray.update.set_text(i18n::tray_update(language, &update.version));
+        if !tray.update_shown.swap(true, Ordering::SeqCst) {
+            if let Err(e) = tray.menu.insert(&tray.update, 0) {
+                log::debug!("Failed to add the update item to the tray menu: {}", e);
+            }
+        }
     }
 }
 
 fn get_app_dir() -> PathBuf {
+    // Development builds can keep their settings apart from the installed Typr
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("TYPR_CONFIG_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("com.typr.app")
@@ -66,6 +121,31 @@ fn log_environment(app_dir: &PathBuf, settings: &Settings) {
     );
     log::info!("Config folder: {}", app_dir.display());
     log::info!("Settings: {}", settings.summary());
+}
+
+/// Builds the main window from tauri.conf.json. It isn't created at startup
+/// by Tauri ("create": false): a start with Windows goes straight to the tray.
+fn build_main_window(app: &tauri::AppHandle) {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .cloned();
+    match config {
+        Some(config) => {
+            log::info!("Opening the main window");
+            let built = WebviewWindowBuilder::from_config(app, &config).and_then(|builder| builder.build());
+            match built {
+                Ok(window) => {
+                    let _ = window.set_focus();
+                }
+                Err(e) => log::error!("Failed to open the main window: {}", e),
+            }
+        }
+        None => log::error!("Main window is missing from tauri.conf.json"),
+    }
 }
 
 /// Focuses the main window, re-creating it if it was closed. Closing destroys
@@ -85,27 +165,7 @@ fn show_main_window(app: &tauri::AppHandle) {
     let app = app.clone();
     // Building a window inside an event handler deadlocks on Windows, so use a thread
     std::thread::spawn(move || {
-        let config = app
-            .config()
-            .app
-            .windows
-            .iter()
-            .find(|window| window.label == "main")
-            .cloned();
-        match config {
-            Some(config) => {
-                log::info!("Opening the main window");
-                let built = WebviewWindowBuilder::from_config(&app, &config)
-                    .and_then(|builder| builder.build());
-                match built {
-                    Ok(window) => {
-                        let _ = window.set_focus();
-                    }
-                    Err(e) => log::error!("Failed to open the main window: {}", e),
-                }
-            }
-            None => log::error!("Main window is missing from tauri.conf.json"),
-        }
+        build_main_window(&app);
         OPENING_MAIN_WINDOW.store(false, Ordering::SeqCst);
     });
 }
@@ -151,23 +211,16 @@ fn sync_overlay(app: &tauri::AppHandle) {
     overlay::set_enabled(app, allowed);
 }
 
-#[tauri::command]
-fn get_settings(state: State<AppState>) -> Settings {
-    state.settings.lock().unwrap().clone()
-}
-
-#[tauri::command]
-fn save_settings(
-    app: tauri::AppHandle,
-    state: State<AppState>,
-    settings: Settings,
-) -> Result<(), String> {
+/// Applies settings saved from anywhere (the window or the tray): saves
+/// them, logs what changed and updates everything that depends on them.
+fn apply_settings(app: &tauri::AppHandle, settings: Settings) -> Result<(), String> {
+    let state = app.state::<AppState>();
     let old = state.settings.lock().unwrap().clone();
     // While the hotkey is off (tray), the new one is registered when it's turned back on
     if settings.hotkey != old.hotkey && state.hotkey_enabled.load(Ordering::SeqCst) {
-        if let Err(e) = register_hotkey(&app, &settings.hotkey) {
+        if let Err(e) = register_hotkey(app, &settings.hotkey) {
             log::error!("Failed to register new hotkey '{}': {}", settings.hotkey, e);
-            let _ = register_hotkey(&app, &old.hotkey);
+            let _ = register_hotkey(app, &old.hotkey);
             return Err(e);
         }
     }
@@ -190,16 +243,110 @@ fn save_settings(
     }
 
     let indicator_changed = settings.show_indicator != old.show_indicator;
-    let language_changed = settings.language != old.language;
+    let tray_changed = settings.language != old.language || settings.engine != old.engine;
+    let updates_turned_on = settings.check_updates && !old.check_updates;
     app.state::<LocalEngine>().settings_changed(&old, &settings);
     *state.settings.lock().unwrap() = settings;
     if indicator_changed {
-        sync_overlay(&app);
+        sync_overlay(app);
     }
-    if language_changed {
-        update_tray_menu(&app);
+    if tray_changed {
+        update_tray_menu(app);
+    }
+    if updates_turned_on {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = run_update_check(&app).await;
+        });
     }
     Ok(())
+}
+
+/// Engine chosen in the tray menu. The window follows through `engine-changed`.
+fn set_engine_from_tray(app: &tauri::AppHandle, engine: Engine) {
+    let mut settings = app.state::<AppState>().settings.lock().unwrap().clone();
+    if settings.engine != engine {
+        log::info!("Engine switched to {} from the tray", engine.label());
+        settings.engine = engine;
+        if let Err(e) = apply_settings(app, settings) {
+            log::error!("Failed to switch the engine: {}", e);
+        }
+    }
+    // The clicked item toggled itself; put every check mark right again
+    update_tray_menu(app);
+    let current = app.state::<AppState>().settings.lock().unwrap().engine;
+    if let Err(e) = app.emit("engine-changed", current) {
+        log::debug!("Failed to emit engine-changed: {}", e);
+    }
+}
+
+/// Pastes the last dictation again, into the window it went to. If that
+/// window is gone, the text is put on the clipboard instead.
+fn paste_last_dictation(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    if state.recorder.get_state() != RecordingState::Ready {
+        log::info!("Paste last dictation ignored: a dictation is running");
+        return;
+    }
+    let Some(last) = state.last_dictation.lock().unwrap().clone() else {
+        return;
+    };
+    // Off the event loop: the paste waits for the window and the clipboard
+    std::thread::spawn(move || {
+        if paste::focus_window(last.window) {
+            // Let the window take the focus back from the tray menu
+            std::thread::sleep(Duration::from_millis(150));
+            match paste::paste_text(&last.text) {
+                Ok(()) => log::info!("Last dictation pasted again"),
+                Err(e) => log::error!("Failed to paste the last dictation: {}", e),
+            }
+        } else {
+            match paste::copy_text(&last.text) {
+                Ok(()) => log::info!("The window of the last dictation is gone; its text is on the clipboard"),
+                Err(e) => log::error!("Failed to copy the last dictation: {}", e),
+            }
+        }
+    });
+}
+
+/// Looks for a newer release, remembers it and tells the window and the tray.
+async fn run_update_check(app: &tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let result = updates::check().await;
+    match &result {
+        Ok(update) => {
+            *app.state::<AppState>().update.lock().unwrap() = update.clone();
+            if let Err(e) = app.emit("update-available", update.clone()) {
+                log::debug!("Failed to emit update-available: {}", e);
+            }
+            update_tray_menu(app);
+        }
+        Err(e) => log::warn!("{}", e),
+    }
+    result
+}
+
+fn start_update_checks(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(UPDATE_CHECK_DELAY).await;
+        loop {
+            let enabled = app.state::<AppState>().settings.lock().unwrap().check_updates;
+            if enabled {
+                let _ = run_update_check(&app).await;
+            }
+            tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
+        }
+    });
+}
+
+#[tauri::command]
+fn get_settings(state: State<AppState>) -> Settings {
+    state.settings.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
+    apply_settings(&app, settings)
 }
 
 #[tauri::command]
@@ -249,12 +396,14 @@ async fn list_postprocess_models(
     provider: String,
     api_key: String,
 ) -> Result<Vec<ModelInfo>, String> {
+    let provider = PostProvider::parse(&provider)
+        .ok_or_else(|| format!("Unknown post-processing provider: {}", provider))?;
     let api_key = if api_key.trim().is_empty() {
-        engine_key(&state, &provider)
+        state.settings.lock().unwrap().engine_key(provider).to_string()
     } else {
         api_key
     };
-    postprocess::list_models(&provider, &api_key)
+    postprocess::list_models(provider, &api_key)
         .await
         .map_err(|e| {
             log::warn!("Could not load post-processing models: {}", e);
@@ -262,8 +411,31 @@ async fn list_postprocess_models(
         })
 }
 
-fn engine_key(state: &AppState, provider: &str) -> String {
-    state.settings.lock().unwrap().engine_key(provider).to_string()
+#[tauri::command]
+fn get_autostart() -> bool {
+    autostart::is_enabled()
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    autostart::set_enabled(enabled)
+}
+
+/// The newer release found by the last check, if any
+#[tauri::command]
+fn get_update(state: State<AppState>) -> Option<UpdateInfo> {
+    state.update.lock().unwrap().clone()
+}
+
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    run_update_check(&app).await
+}
+
+/// Opens a page in the browser (release page, where to get API keys)
+#[tauri::command]
+fn open_link(url: String) -> Result<(), String> {
+    links::open(&url)
 }
 
 // ── Local recognition ───────────────────────────────
@@ -333,20 +505,30 @@ fn begin_recording(app: &tauri::AppHandle, state: &AppState) -> Result<(), Strin
             recorder::notify_error(app, &e);
             e
         })?;
-    // The local model loads while the user speaks
-    if settings.engine == "local" {
+    // While the user speaks: the local model loads, or the connections to
+    // the cloud open
+    if settings.engine == Engine::Local {
         app.state::<LocalEngine>()
             .preload(&settings.local_model, &settings.local_backend);
     }
+    recorder::warm_up_connections(&settings);
     Ok(())
 }
 
 async fn finish_recording(app: &tauri::AppHandle, state: &AppState) -> Result<String, String> {
     let settings = state.settings.lock().unwrap().clone();
-    state
-        .recorder
-        .stop_and_transcribe(app, &settings, &state.app_dir)
-        .await
+    let result = state.recorder.stop_and_transcribe(app, &settings).await;
+    if let Ok(text) = &result {
+        if !text.is_empty() {
+            // Right after the paste the target window is still in front
+            *state.last_dictation.lock().unwrap() = Some(LastDictation {
+                text: text.clone(),
+                window: paste::foreground_window(),
+            });
+            update_tray_menu(app);
+        }
+    }
+    result
 }
 
 /// Shared logic for toggle recording, used by both the Tauri command and hotkey handler.
@@ -455,8 +637,8 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), Strin
     app.global_shortcut().on_shortcut(normalized.as_str(), move |_app, shortcut, event| {
         let handle = handle.clone();
         let state = handle.state::<AppState>();
-        let mode = state.settings.lock().unwrap().recording_mode.clone();
-        let push_to_talk = mode == "push-to-talk";
+        let mode = state.settings.lock().unwrap().recording_mode;
+        let push_to_talk = mode == RecordingMode::PushToTalk;
 
         match event.state {
             ShortcutState::Pressed => {
@@ -506,6 +688,113 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// The tray icon and its menu, in the interface language.
+fn build_tray(app: &tauri::App, settings: &Settings) -> tauri::Result<()> {
+    let language = i18n::resolve(&settings.language);
+    let open = MenuItem::with_id(app, "open", i18n::tray_open(language), true, None::<&str>)?;
+    let paste_last = MenuItem::with_id(app, "paste-last", i18n::tray_paste_last(language), false, None::<&str>)?;
+    let engines = Engine::ALL
+        .iter()
+        .map(|&engine| {
+            CheckMenuItem::with_id(
+                app,
+                format!("engine:{}", engine.id()),
+                i18n::engine_label(language, engine),
+                true,
+                engine == settings.engine,
+                None::<&str>,
+            )
+            .map(|item| (engine, item))
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let engine_items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        engines.iter().map(|(_, item)| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+    let engine = Submenu::with_items(app, i18n::tray_engine(language), true, &engine_items)?;
+    let hotkey = CheckMenuItem::with_id(
+        app,
+        "toggle-hotkey",
+        i18n::tray_hotkey(language, true),
+        true,
+        true,
+        None::<&str>,
+    )?;
+    let exit = MenuItem::with_id(app, "exit", i18n::tray_exit(language), true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", "", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &open,
+            &paste_last,
+            &engine,
+            &PredefinedMenuItem::separator(app)?,
+            &hotkey,
+            &PredefinedMenuItem::separator(app)?,
+            &exit,
+        ],
+    )?;
+
+    let tray_icon = match app.default_window_icon() {
+        Some(i) => i.clone(),
+        None => tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).expect("tray icon"),
+    };
+
+    TrayIconBuilder::new()
+        .icon(tray_icon)
+        .tooltip("Typr")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click { button, .. } = event {
+                if button == tauri::tray::MouseButton::Left {
+                    log::debug!("Tray icon clicked, showing the main window");
+                    show_main_window(tray.app_handle());
+                }
+            }
+        })
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            if let Some(engine) = id.strip_prefix("engine:").and_then(Engine::parse) {
+                set_engine_from_tray(app, engine);
+                return;
+            }
+            match id {
+                "open" => show_main_window(app),
+                "paste-last" => paste_last_dictation(app),
+                "update" => {
+                    let url = app.state::<AppState>().update.lock().unwrap().as_ref().map(|u| u.url.clone());
+                    if let Some(url) = url {
+                        if let Err(e) = links::open(&url) {
+                            log::error!("{}", e);
+                        }
+                    }
+                }
+                "exit" => {
+                    log::info!("Tray Exit clicked, terminating application");
+                    app.exit(0);
+                }
+                "toggle-hotkey" => {
+                    let enabled = !app.state::<AppState>().hotkey_enabled.load(Ordering::SeqCst);
+                    set_hotkey_enabled(app, enabled);
+                }
+                _ => {}
+            }
+        })
+        .build(app)?;
+
+    app.manage(TrayMenu {
+        menu,
+        open,
+        paste_last,
+        engine,
+        engines,
+        hotkey,
+        exit,
+        update,
+        update_shown: AtomicBool::new(false),
+    });
+    Ok(())
+}
+
 fn main() {
     // Started by Typr itself to run a local model (local/worker.rs)
     if std::env::args().nth(1).as_deref() == Some(typr_lib::local::worker::ARG) {
@@ -520,6 +809,7 @@ fn main() {
     let initial_hotkey = settings.hotkey.clone();
     let startup_settings = settings.clone();
     let startup_dir = app_dir.clone();
+    let autostarted = std::env::args().any(|arg| arg == autostart::ARG);
 
     let app = tauri::Builder::default()
         // Must be the first plugin, so a second launch is intercepted early
@@ -534,6 +824,8 @@ fn main() {
             app_dir,
             ptt_held: AtomicBool::new(false),
             hotkey_enabled: AtomicBool::new(true),
+            last_dictation: Mutex::new(None),
+            update: Mutex::new(None),
         })
         .manage(LocalEngine::new(LocalPaths::new(LocalPaths::default_root())))
         .invoke_handler(tauri::generate_handler![
@@ -545,6 +837,11 @@ fn main() {
             get_hotkey_enabled,
             get_system_language,
             list_postprocess_models,
+            get_autostart,
+            set_autostart,
+            get_update,
+            check_for_updates,
+            open_link,
             local_status,
             local_download_model,
             local_download_runtime,
@@ -566,61 +863,9 @@ fn main() {
             logger::attach_app(app.handle().clone());
             app.state::<LocalEngine>().attach(app.handle().clone());
             log_environment(&startup_dir, &startup_settings);
+            autostart::refresh();
 
-            // System tray: hotkey on/off switch and Exit, in the interface language
-            let language = i18n::resolve(&startup_settings.language);
-            let hotkey_item = CheckMenuItem::with_id(
-                app,
-                "toggle-hotkey",
-                i18n::tray_hotkey(language, true),
-                true,
-                true,
-                None::<&str>,
-            )?;
-            let separator = PredefinedMenuItem::separator(app)?;
-            let quit_i = MenuItem::with_id(
-                app,
-                "exit",
-                i18n::tray_exit(language),
-                true,
-                None::<&str>,
-            )?;
-            let tray_menu = Menu::with_items(app, &[&hotkey_item, &separator, &quit_i])?;
-            app.manage(TrayMenu {
-                hotkey: hotkey_item.clone(),
-                exit: quit_i.clone(),
-            });
-
-            let tray_icon = match app.default_window_icon() {
-                Some(i) => i.clone(),
-                None => tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).expect("tray icon"),
-            };
-
-            let _tray = TrayIconBuilder::new()
-                .icon(tray_icon)
-                .tooltip("Typr")
-                .menu(&tray_menu)
-                .show_menu_on_left_click(false)
-                .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { button, .. } = event {
-                        if button == tauri::tray::MouseButton::Left {
-                            log::debug!("Tray icon clicked, showing the main window");
-                            show_main_window(tray.app_handle());
-                        }
-                    }
-                })
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "exit" => {
-                        log::info!("Tray Exit clicked, terminating application");
-                        app.exit(0);
-                    }
-                    "toggle-hotkey" => {
-                        let enabled = !app.state::<AppState>().hotkey_enabled.load(Ordering::SeqCst);
-                        set_hotkey_enabled(app, enabled);
-                    }
-                    _ => {}
-                })
-                .build(app)?;
+            build_tray(app, &startup_settings)?;
 
             // Recording indicator (small mic, top-right, always on top). It waits
             // behind the top edge of the screen and slides in only while dictating
@@ -640,6 +885,15 @@ fn main() {
                 log::error!("Failed to register initial global shortcut: {}", e);
             }
 
+            // Started with Windows: straight to the tray, unless the first-run
+            // setup still has to be done
+            if autostarted && startup_settings.setup_done {
+                log::info!("Started with Windows, waiting in the tray");
+            } else {
+                build_main_window(app.handle());
+            }
+
+            start_update_checks(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

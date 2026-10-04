@@ -2,11 +2,14 @@
 //! upload the WAV, create a transcript job, then poll the job until it is done.
 
 use serde_json::json;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::audio::{AudioFormat, EncodedAudio};
 use crate::net;
 
+pub const HOST: &str = "https://api.assemblyai.com";
+/// AssemblyAI reads FLAC, which uploads faster than WAV
+pub const FORMAT: AudioFormat = AudioFormat::Flac;
 const UPLOAD_URL: &str = "https://api.assemblyai.com/v2/upload";
 const TRANSCRIPT_URL: &str = "https://api.assemblyai.com/v2/transcript";
 pub const DEFAULT_MODEL: &str = "universal-3-5-pro";
@@ -16,10 +19,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// Gives up on a job that is still unfinished after this long
 const MAX_WAIT: Duration = Duration::from_secs(180);
 
+/// `language` is an ISO 639-1 code; `None` turns on language detection.
 pub async fn transcribe_assemblyai(
     api_key: &str,
     model: &str,
-    audio_path: &PathBuf,
+    language: Option<&str>,
+    audio: &EncodedAudio,
 ) -> Result<String, String> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
@@ -32,18 +37,15 @@ pub async fn transcribe_assemblyai(
         other => other,
     };
 
-    let audio_bytes = std::fs::read(audio_path)
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
-    let size_kb = audio_bytes.len() / 1024;
     let client = net::client()?;
     let started = Instant::now();
 
-    log::info!("AssemblyAI: POST {} ({} KB)", UPLOAD_URL, size_kb);
+    log::info!("AssemblyAI: POST {} ({} KB {:?})", UPLOAD_URL, audio.size_kb(), audio.format);
     let response = client
         .post(UPLOAD_URL)
         .header("authorization", api_key)
         .header("content-type", "application/octet-stream")
-        .body(audio_bytes)
+        .body(audio.bytes.clone())
         .send()
         .await
         .map_err(|e| format!("AssemblyAI upload failed: {}", net::describe_error(&e)))?;
@@ -54,15 +56,23 @@ pub async fn transcribe_assemblyai(
         .to_string();
     log::info!("AssemblyAI: audio uploaded in {} ms", started.elapsed().as_millis());
 
-    // Language detection, so Russian and other languages aren't forced into English
-    let body = json!({
+    let mut body = json!({
         "audio_url": audio_url,
         "speech_models": [model],
-        "language_detection": true,
         "punctuate": true,
         "format_text": true
     });
-    log::info!("AssemblyAI: POST {} (model {})", TRANSCRIPT_URL, model);
+    match language {
+        Some(language) => body["language_code"] = json!(language),
+        // Detection, so Russian and other languages aren't forced into English
+        None => body["language_detection"] = json!(true),
+    }
+    log::info!(
+        "AssemblyAI: POST {} (model {}, language {})",
+        TRANSCRIPT_URL,
+        model,
+        language.unwrap_or("auto")
+    );
     let response = client
         .post(TRANSCRIPT_URL)
         .header("authorization", api_key)
@@ -130,8 +140,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_api_key() {
-        let path = PathBuf::from("/tmp/test.wav");
-        let result = transcribe_assemblyai("", "", &path).await;
+        let audio = EncodedAudio { bytes: Vec::new(), format: FORMAT };
+        let result = transcribe_assemblyai("", "", None, &audio).await;
         assert!(result.unwrap_err().contains("API key not set"));
     }
 

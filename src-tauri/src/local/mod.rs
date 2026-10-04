@@ -33,6 +33,8 @@ use hardware::Hardware;
 use runtime::Paths;
 use worker::{Worker, WorkerError};
 
+use crate::settings::Engine;
+
 /// Download progress, payload [`DownloadProgress`]
 pub const DOWNLOAD_EVENT: &str = "local-download";
 /// Something changed (installed, deleted, loaded, unloaded); the UI re-reads
@@ -371,14 +373,20 @@ impl LocalEngine {
         self.ensure_model(&mut slot, spec, backend)
     }
 
-    fn transcribe_blocking(&self, model: &str, backend_choice: &str, samples: &[f32]) -> Result<String, String> {
+    fn transcribe_blocking(
+        &self,
+        model: &str,
+        backend_choice: &str,
+        language: Option<&str>,
+        samples: &[f32],
+    ) -> Result<String, String> {
         let backend = self.hardware().resolve(backend_choice);
         let spec = Self::model_for(model);
         let mut slot = lock(&self.inner.model);
         self.ensure_model(&mut slot, spec, backend)?;
 
         let current = slot.as_mut().expect("ensure_model leaves a model loaded");
-        let result = current.worker.transcribe(samples);
+        let result = current.worker.transcribe(samples, language);
         let placement = current.worker.placement().clone();
         match result {
             Ok(text) => {
@@ -407,19 +415,49 @@ impl LocalEngine {
                 *lock(&self.inner.gpu_crash) = Some(format!("{} crashed ({})", placement.backend, reason));
                 self.ensure_model(&mut slot, spec, backend)?;
                 let current = slot.as_mut().expect("ensure_model leaves a model loaded");
-                current.worker.transcribe(samples).map_err(|e| e.message().to_string())
+                current.worker.transcribe(samples, language).map_err(|e| e.message().to_string())
             }
         }
     }
 
-    /// Transcribes 16 kHz mono samples with the model chosen in settings.
-    pub async fn transcribe(&self, model: &str, backend: &str, samples: Vec<f32>) -> Result<String, String> {
+    /// Transcribes 16 kHz mono samples with `model`. `language` is a hint
+    /// such as "ru"; `None` detects it.
+    pub async fn transcribe(
+        &self,
+        model: &str,
+        backend: &str,
+        language: Option<&str>,
+        samples: Vec<f32>,
+    ) -> Result<String, String> {
         let engine = self.clone();
         let model = model.to_string();
         let backend = backend.to_string();
-        tokio::task::spawn_blocking(move || engine.transcribe_blocking(&model, &backend, &samples))
-            .await
-            .map_err(|e| format!("Local recognition stopped unexpectedly: {}", e))?
+        let language = language.map(str::to_string);
+        tokio::task::spawn_blocking(move || {
+            engine.transcribe_blocking(&model, &backend, language.as_deref(), &samples)
+        })
+        .await
+        .map_err(|e| format!("Local recognition stopped unexpectedly: {}", e))?
+    }
+
+    /// A downloaded model that can stand in when a cloud engine fails:
+    /// `preferred` if it is downloaded, else the first downloaded one.
+    /// `None` when nothing local can run.
+    pub fn fallback_model(&self, preferred: &str) -> Option<&'static str> {
+        let paths = self.paths();
+        if !is_supported() || !runtime::is_runtime_installed(paths) {
+            return None;
+        }
+        catalog::model(preferred)
+            .into_iter()
+            .chain(MODELS.iter())
+            .find(|spec| runtime::is_model_installed(paths, spec))
+            .map(|spec| spec.id)
+    }
+
+    /// Whether a model is in memory now.
+    pub fn is_loaded(&self) -> bool {
+        lock(&self.inner.view).is_some()
     }
 
     /// A dictation started: load the model while the user speaks, so the
@@ -475,8 +513,8 @@ impl LocalEngine {
     /// Settings were saved: drop a model that is no longer wanted and
     /// restart the unload timer under a new delay.
     pub fn settings_changed(&self, old: &crate::settings::Settings, new: &crate::settings::Settings) {
-        let was_local = old.engine == "local";
-        let is_local = new.engine == "local";
+        let was_local = old.engine == Engine::Local;
+        let is_local = new.engine == Engine::Local;
         if old.local_backend != new.local_backend {
             // A new choice gets a fresh try on the GPU
             *lock(&self.inner.gpu_crash) = None;
@@ -720,12 +758,21 @@ mod tests {
     }
 
     #[test]
+    fn test_no_fallback_without_a_downloaded_model() {
+        let root = std::env::temp_dir().join("typr_test_local_fallback");
+        let _ = std::fs::remove_dir_all(&root);
+        let engine = LocalEngine::new(Paths::new(root));
+        assert_eq!(engine.fallback_model(catalog::DEFAULT_MODEL), None);
+        assert!(!engine.is_loaded());
+    }
+
+    #[test]
     fn test_transcribing_without_downloads_explains_what_is_missing() {
         let root = std::env::temp_dir().join("typr_test_local_missing");
         let _ = std::fs::remove_dir_all(&root);
         let engine = LocalEngine::new(Paths::new(root));
         let error = engine
-            .transcribe_blocking(catalog::DEFAULT_MODEL, "cpu", &[0.0; 16000])
+            .transcribe_blocking(catalog::DEFAULT_MODEL, "cpu", None, &[0.0; 16000])
             .unwrap_err();
         if is_supported() {
             assert!(error.contains("isn't downloaded yet"), "{}", error);

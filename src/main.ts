@@ -3,8 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enhanceSelect, syncSelect } from "./dropdown";
-import { getLanguage, setLanguage, t, type Lang, type MessageKey } from "./i18n";
+import { fillLanguageOptions, getLanguage, setLanguage, t, type Lang, type MessageKey } from "./i18n";
 import { fillLocal, initLocal, showLocal, showLocalComponents, translateLocal } from "./local";
+import { initSetup, openSetup, translateSetup } from "./setup";
 import {
   fillPostProcess,
   initPostProcess,
@@ -26,6 +27,10 @@ interface Settings {
   polzaProvider: string;
   assemblyaiApiKey: string;
   assemblyaiModel: string;
+  /** Language of the speech, e.g. "ru"; empty detects it */
+  recognitionLanguage: string;
+  /** A failed cloud transcription goes to a downloaded local model */
+  fallbackLocal: boolean;
   /** Local engine: model id, backend ("" = recommended) and unload delay */
   localModel: string;
   localBackend: string;
@@ -37,12 +42,27 @@ interface Settings {
   /** "en", "ru", or empty to follow the system */
   language: string;
   postProcess: PostProcessSettings;
+  checkUpdates: boolean;
+  /** The first-run setup was finished or skipped */
+  setupDone: boolean;
   developerMode: boolean;
 }
 
 interface MicDevice {
   name: string;
   is_default: boolean;
+}
+
+/** A newer release on GitHub (updates.rs) */
+interface UpdateInfo {
+  version: string;
+  url: string;
+}
+
+/** A cloud engine failed and the local model transcribed instead */
+interface FallbackNotice {
+  engine: string;
+  error: string;
 }
 
 type LogLevel = "error" | "warn" | "info" | "debug";
@@ -116,6 +136,15 @@ const statusText = document.getElementById("status-text")!;
 const statusDetail = document.getElementById("status-detail")!;
 const micSelect = document.getElementById("mic-select") as HTMLSelectElement;
 const indicatorToggle = document.getElementById("indicator-toggle") as HTMLInputElement;
+const autostartToggle = document.getElementById("autostart-toggle") as HTMLInputElement;
+const updatesToggle = document.getElementById("updates-toggle") as HTMLInputElement;
+const updatesStatus = document.getElementById("updates-status")!;
+const updatesCheck = document.getElementById("updates-check") as HTMLButtonElement;
+const setupRun = document.getElementById("setup-run")!;
+const updateLink = document.getElementById("update-link")!;
+const recognitionLanguage = document.getElementById("recognition-language") as HTMLSelectElement;
+const fallbackRow = document.getElementById("fallback-row")!;
+const fallbackToggle = document.getElementById("fallback-toggle") as HTMLInputElement;
 const engineLocal = document.getElementById("engine-local")!;
 const engineGroq = document.getElementById("engine-groq")!;
 const engineOpenai = document.getElementById("engine-openai")!;
@@ -158,10 +187,6 @@ const logCopy = document.getElementById("log-copy")!;
 const logClear = document.getElementById("log-clear")!;
 const logLevelButtons = document.querySelectorAll<HTMLButtonElement>("#log-levels .segment");
 
-if (/Macintosh|Mac OS X/.test(navigator.userAgent)) {
-  document.body.classList.add("platform-mac");
-}
-
 // Section navigation
 const navItems = document.querySelectorAll<HTMLElement>(".nav-item");
 const sections = document.querySelectorAll<HTMLElement>(".content-section");
@@ -183,15 +208,9 @@ navItems.forEach((item) => {
   item.addEventListener("click", () => showSection(item.dataset.section || "general"));
 });
 
-// Window drag — titlebar and sidebar empty space
-const titlebar = document.getElementById("titlebar")!;
+// Window drag — the sidebar's empty space
 const sidebar = document.getElementById("sidebar")!;
 const appWindow = getCurrentWindow();
-
-titlebar.addEventListener("mousedown", (e) => {
-  if ((e.target as HTMLElement).closest("button, select, input, a, .nav-item")) return;
-  appWindow.startDragging();
-});
 
 sidebar.addEventListener("mousedown", (e) => {
   if ((e.target as HTMLElement).closest("button, select, input, a, label, .nav-item, #status-detail")) return;
@@ -207,10 +226,22 @@ const GROQ_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"];
 const ASSEMBLYAI_MODELS = ["universal-3-5-pro", "universal-2"];
 
 // App-styled lists instead of the browser's native <select> popup
-[micSelect, groqModel, assemblyaiModel].forEach(enhanceSelect);
+fillLanguageOptions(recognitionLanguage);
+[micSelect, groqModel, assemblyaiModel, recognitionLanguage].forEach(enhanceSelect);
 
 initPostProcess({ settings: () => currentSettings, save: saveQuietly });
 initLocal({ settings: () => currentSettings, save: saveQuietly });
+initSetup({
+  settings: () => currentSettings,
+  save: saveSettings,
+  setLanguage: chooseLanguage,
+  hotkeyLabel: () => formatHotkey(currentSettings.hotkey),
+  closed: () => {
+    fillForm();
+    loadAutostart();
+    showSection("general");
+  },
+});
 
 // The window stays hidden until its language is known (see .i18n-pending);
 // the timeout makes sure a failed startup never leaves it blank
@@ -232,6 +263,18 @@ function applyLanguage(lang: Lang) {
   updateLogMeta();
   translatePostProcess();
   translateLocal();
+  fillLanguageOptions(recognitionLanguage);
+  syncSelect(recognitionLanguage);
+  renderUpdate();
+  translateSetup();
+}
+
+/** The interface language picked in General or in the setup */
+function chooseLanguage(lang: Lang) {
+  if (currentSettings.language === lang && getLanguage() === lang) return;
+  currentSettings.language = lang;
+  applyLanguage(lang);
+  saveQuietly();
 }
 
 function formatKeyForDisplay(key: string): string {
@@ -246,11 +289,13 @@ function formatKeyForDisplay(key: string): string {
   return key;
 }
 
+function formatHotkey(hotkeyStr: string): string {
+  return hotkeyStr.split("+").map(formatKeyForDisplay).join("+");
+}
+
 function displayHotkey(hotkeyStr: string) {
   if (!hotkeyStr) return;
-  const parts = hotkeyStr.split("+");
-  const formatted = parts.map(formatKeyForDisplay);
-  hotkeyText.textContent = formatted.join("+");
+  hotkeyText.textContent = formatHotkey(hotkeyStr);
 }
 
 // Mic dropdown: the system default first, then every input device
@@ -289,14 +334,43 @@ async function loadSettings() {
   microphones = await invoke<MicDevice[]>("list_microphones");
   microphonesLoaded = true;
   const savedMic = currentSettings.microphone || "default";
-  micSelect.value = "";
-  renderMicOptions();
   if (savedMic !== "default" && !microphones.some((mic) => mic.name === savedMic)) {
     uiLog("warn", `Saved microphone "${savedMic}" is not connected, the system default will be used`);
   }
 
+  fillForm();
+  uiLog("debug", `Settings loaded, ${microphones.length} microphone(s) available`);
+
+  loadAutostart();
+  invoke<UpdateInfo | null>("get_update")
+    .then((info) => {
+      update = info;
+      renderUpdate();
+    })
+    .catch((err) => uiLog("warn", "Could not read the update state:", err));
+
+  if (!currentSettings.setupDone) {
+    await openSetup();
+  }
+}
+
+function loadAutostart() {
+  invoke<boolean>("get_autostart")
+    .then((enabled) => (autostartToggle.checked = enabled))
+    .catch((err) => uiLog("warn", "Could not read the startup state:", err));
+}
+
+/** Puts the settings into the form */
+function fillForm() {
+  micSelect.value = "";
+  renderMicOptions();
+
   // Recording indicator (on unless switched off)
   indicatorToggle.checked = currentSettings.showIndicator !== false;
+  updatesToggle.checked = currentSettings.checkUpdates !== false;
+  if (getLanguage() !== resolveLanguage(currentSettings.language || "")) {
+    applyLanguage(resolveLanguage(currentSettings.language || ""));
+  }
 
   // Engine
   setEngine(currentSettings.engine || "groq");
@@ -319,6 +393,11 @@ async function loadSettings() {
   assemblyaiKey.value = currentSettings.assemblyaiApiKey || "";
   setChoice(assemblyaiModel, ASSEMBLYAI_MODELS, currentSettings.assemblyaiModel);
 
+  // Speech
+  recognitionLanguage.value = currentSettings.recognitionLanguage || "";
+  syncSelect(recognitionLanguage);
+  fallbackToggle.checked = currentSettings.fallbackLocal !== false;
+
   // Recording mode
   setRecordingMode(currentSettings.recordingMode || "toggle");
 
@@ -331,8 +410,6 @@ async function loadSettings() {
 
   // Local engine
   fillLocal();
-
-  uiLog("debug", `Settings loaded, ${microphones.length} microphone(s) available`);
 }
 
 function setEngine(engine: string) {
@@ -348,6 +425,7 @@ function setEngine(engine: string) {
   assemblyaiSettings.classList.toggle("hidden", engine !== "assemblyai");
   localSettings.classList.toggle("hidden", engine !== "local");
   cloudSettings.classList.toggle("hidden", engine === "local");
+  fallbackRow.classList.toggle("hidden", engine === "local");
 }
 
 // Selects a saved model; an unknown one falls back to the first option
@@ -362,21 +440,9 @@ function setRecordingMode(mode: string) {
   modePtt.classList.toggle("active", mode === "push-to-talk");
 }
 
+// The form writes every change into currentSettings (here and in the
+// modules); saving sends that object as it is.
 async function saveSettings() {
-  currentSettings.microphone = micSelect.value;
-  currentSettings.showIndicator = indicatorToggle.checked;
-  currentSettings.groqApiKey = groqKey.value.trim();
-  currentSettings.groqModel = groqModel.value;
-  currentSettings.openaiEndpoint = openaiEndpoint.value.trim();
-  currentSettings.openaiModel = openaiModel.value.trim();
-  currentSettings.openaiApiKey = openaiKey.value.trim();
-  currentSettings.polzaApiKey = polzaKey.value.trim();
-  currentSettings.polzaModel = polzaModel.value.trim();
-  currentSettings.polzaProvider = polzaProvider.value.trim();
-  currentSettings.assemblyaiApiKey = assemblyaiKey.value.trim();
-  currentSettings.assemblyaiModel = assemblyaiModel.value;
-  currentSettings.appendSpace = appendSpaceToggle.checked;
-  currentSettings.developerMode = devModeToggle.checked;
   try {
     await invoke("save_settings", { settings: currentSettings });
   } catch (err) {
@@ -418,28 +484,99 @@ engineAssemblyai.addEventListener("click", () => {
   saveQuietly();
 });
 
-micSelect.addEventListener("change", () => saveQuietly());
-indicatorToggle.addEventListener("change", () => saveQuietly());
-groqKey.addEventListener("change", () => saveQuietly());
-groqModel.addEventListener("change", () => saveQuietly());
-appendSpaceToggle.addEventListener("change", () => saveQuietly());
-openaiEndpoint.addEventListener("change", () => saveQuietly());
-openaiModel.addEventListener("change", () => saveQuietly());
-openaiKey.addEventListener("change", () => saveQuietly());
-polzaKey.addEventListener("change", () => saveQuietly());
-polzaModel.addEventListener("change", () => saveQuietly());
-polzaProvider.addEventListener("change", () => saveQuietly());
-assemblyaiKey.addEventListener("change", () => saveQuietly());
-assemblyaiModel.addEventListener("change", () => saveQuietly());
-
-languageButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    const lang: Lang = button.dataset.lang === "ru" ? "ru" : "en";
-    if (currentSettings.language === lang && getLanguage() === lang) return;
-    currentSettings.language = lang;
-    applyLanguage(lang);
+/** Saves `apply`'s change to the settings when `control` changes */
+function bind(control: HTMLInputElement | HTMLSelectElement, apply: () => void) {
+  control.addEventListener("change", () => {
+    apply();
     saveQuietly();
   });
+}
+
+bind(micSelect, () => (currentSettings.microphone = micSelect.value));
+bind(indicatorToggle, () => (currentSettings.showIndicator = indicatorToggle.checked));
+bind(groqKey, () => (currentSettings.groqApiKey = groqKey.value.trim()));
+bind(groqModel, () => (currentSettings.groqModel = groqModel.value));
+bind(appendSpaceToggle, () => (currentSettings.appendSpace = appendSpaceToggle.checked));
+bind(openaiEndpoint, () => (currentSettings.openaiEndpoint = openaiEndpoint.value.trim()));
+bind(openaiModel, () => (currentSettings.openaiModel = openaiModel.value.trim()));
+bind(openaiKey, () => (currentSettings.openaiApiKey = openaiKey.value.trim()));
+bind(polzaKey, () => (currentSettings.polzaApiKey = polzaKey.value.trim()));
+bind(polzaModel, () => (currentSettings.polzaModel = polzaModel.value.trim()));
+bind(polzaProvider, () => (currentSettings.polzaProvider = polzaProvider.value.trim()));
+bind(assemblyaiKey, () => (currentSettings.assemblyaiApiKey = assemblyaiKey.value.trim()));
+bind(assemblyaiModel, () => (currentSettings.assemblyaiModel = assemblyaiModel.value));
+bind(recognitionLanguage, () => (currentSettings.recognitionLanguage = recognitionLanguage.value));
+bind(fallbackToggle, () => (currentSettings.fallbackLocal = fallbackToggle.checked));
+bind(updatesToggle, () => (currentSettings.checkUpdates = updatesToggle.checked));
+
+languageButtons.forEach((button) => {
+  button.addEventListener("click", () => chooseLanguage(button.dataset.lang === "ru" ? "ru" : "en"));
+});
+
+autostartToggle.addEventListener("change", async () => {
+  const enabled = autostartToggle.checked;
+  try {
+    await invoke("set_autostart", { enabled });
+  } catch (err) {
+    uiLog("error", "Failed to change starting with Windows:", err);
+    autostartToggle.checked = !enabled;
+  }
+});
+
+setupRun.addEventListener("click", () => void openSetup());
+
+// ── Updates ──────────────────────────────────────────
+
+let update: UpdateInfo | null = null;
+/** What the Updates row says below its label */
+let updateCheck: { kind: "idle" | "checking" | "latest" | "error"; error?: string } = { kind: "idle" };
+
+function renderUpdate() {
+  updateLink.classList.toggle("hidden", !update);
+  if (update) updateLink.textContent = t("sidebar.update", { version: update.version });
+
+  if (update) {
+    updatesStatus.textContent = t("general.updatesAvailable", { version: update.version });
+  } else if (updateCheck.kind === "checking") {
+    updatesStatus.textContent = t("general.updatesChecking");
+  } else if (updateCheck.kind === "latest") {
+    updatesStatus.textContent = t("general.updatesLatest");
+  } else if (updateCheck.kind === "error") {
+    updatesStatus.textContent = t("general.updatesError", { error: updateCheck.error || "" });
+  } else {
+    updatesStatus.textContent = t("general.updatesHint");
+  }
+  updatesStatus.classList.toggle("update-note", Boolean(update) || updateCheck.kind === "error");
+  updatesCheck.textContent = t(update ? "general.updatesOpen" : "general.updatesCheck");
+  updatesCheck.disabled = updateCheck.kind === "checking";
+}
+
+function openUpdate() {
+  if (!update) return;
+  invoke("open_link", { url: update.url }).catch((err) => uiLog("error", "Failed to open the release page:", err));
+}
+
+updatesCheck.addEventListener("click", async () => {
+  if (update) {
+    openUpdate();
+    return;
+  }
+  updateCheck = { kind: "checking" };
+  renderUpdate();
+  try {
+    update = await invoke<UpdateInfo | null>("check_for_updates");
+    updateCheck = { kind: update ? "idle" : "latest" };
+  } catch (err) {
+    updateCheck = { kind: "error", error: String(err) };
+  }
+  renderUpdate();
+});
+
+updateLink.addEventListener("click", openUpdate);
+
+listen<UpdateInfo | null>("update-available", (event) => {
+  update = event.payload;
+  renderUpdate();
 });
 
 modeToggle.addEventListener("click", () => {
@@ -467,10 +604,12 @@ function applyDeveloperMode(enabled: boolean) {
 devModeToggle.addEventListener("change", async () => {
   const enabled = devModeToggle.checked;
   applyDeveloperMode(enabled);
+  currentSettings.developerMode = enabled;
   try {
     await saveSettings();
   } catch {
     applyDeveloperMode(!enabled);
+    currentSettings.developerMode = !enabled;
     return;
   }
   if (enabled) {
@@ -854,7 +993,7 @@ hotkeyBtn.addEventListener("click", () => {
 
 // ── Recording status ─────────────────────────────────
 
-type StatusState = "ready" | "recording" | "transcribing" | "error" | "paused";
+type StatusState = "ready" | "recording" | "transcribing" | "error" | "paused" | "notice";
 let statusResetTimer: number | undefined;
 let hotkeyEnabled = true;
 
@@ -898,7 +1037,7 @@ function applyRecordingState(state: string) {
     setStatus({ state: "recording", text: "status.recording" });
   } else if (state === "Transcribing") {
     setStatus({ state: "transcribing", text: "status.transcribing" });
-  } else if (statusIndicator.dataset.state !== "error") {
+  } else if (statusIndicator.dataset.state !== "error" && statusIndicator.dataset.state !== "notice") {
     setIdleStatus();
   }
 }
@@ -920,6 +1059,26 @@ listen<string>("recording-error", (event) => {
   window.clearTimeout(statusResetTimer);
   setStatus({ state: "error", text: "status.error", rawDetail: event.payload });
   statusResetTimer = window.setTimeout(setIdleStatus, 12000);
+});
+
+// The cloud failed but the local model saved the dictation; arrives before
+// the recorder is back to Ready
+listen<FallbackNotice>("transcription-fallback", (event) => {
+  window.clearTimeout(statusResetTimer);
+  const { engine, error } = event.payload;
+  setStatus({
+    state: "notice",
+    text: "status.fallback",
+    rawDetail: t("status.fallbackDetail", { engine, error }),
+  });
+  statusResetTimer = window.setTimeout(setIdleStatus, 12000);
+});
+
+// Engine switched from the tray menu
+listen<string>("engine-changed", (event) => {
+  if (!currentSettings || currentSettings.engine === event.payload) return;
+  setEngine(event.payload);
+  showLocal();
 });
 
 // Initialize

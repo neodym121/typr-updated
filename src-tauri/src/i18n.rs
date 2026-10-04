@@ -2,6 +2,8 @@
 //! is Russian or one whose speakers usually read Russian more easily than
 //! English. The choice in General overrides the system.
 
+use crate::settings::Engine;
+
 /// ISO 639-1 codes that get the Russian interface by default: Russian,
 /// Ukrainian, Belarusian and languages of other CIS countries where Russian
 /// is widely spoken.
@@ -52,6 +54,47 @@ pub fn tray_exit(language: &str) -> &'static str {
         "Выход"
     } else {
         "Exit"
+    }
+}
+
+pub fn tray_open(language: &str) -> &'static str {
+    if language == "ru" {
+        "Открыть настройки"
+    } else {
+        "Open settings"
+    }
+}
+
+pub fn tray_paste_last(language: &str) -> &'static str {
+    if language == "ru" {
+        "Вставить последнее"
+    } else {
+        "Paste last dictation"
+    }
+}
+
+pub fn tray_engine(language: &str) -> &'static str {
+    if language == "ru" {
+        "Распознавание"
+    } else {
+        "Engine"
+    }
+}
+
+/// Name of an engine in the tray menu
+pub fn engine_label(language: &str, engine: Engine) -> &'static str {
+    match (language, engine) {
+        ("ru", Engine::Local) => "Локально",
+        ("ru", Engine::OpenAi) => "Совместимый с OpenAI",
+        (_, engine) => engine.label(),
+    }
+}
+
+pub fn tray_update(language: &str, version: &str) -> String {
+    if language == "ru" {
+        format!("Доступна версия {}", version)
+    } else {
+        format!("Version {} is available", version)
     }
 }
 

@@ -102,19 +102,6 @@ button {
   width: 100vw;
 }
 
-/* Only macOS draws its window controls over the page (titleBarStyle: Overlay) */
-#titlebar {
-  display: none;
-  height: 38px;
-  width: 100%;
-  flex-shrink: 0;
-  background: var(--surface-sidebar);
-}
-
-.platform-mac #titlebar {
-  display: block;
-}
-
 #app-body {
   display: flex;
   flex: 1;
@@ -221,6 +208,19 @@ button {
   color: var(--accent-light);
 }
 
+/* The cloud failed and the local model transcribed instead */
+#status-indicator[data-state="notice"] {
+  border-color: var(--border-strong);
+}
+
+#status-indicator[data-state="notice"] #status-dot {
+  background: var(--text-secondary);
+}
+
+#status-indicator[data-state="notice"] #status-text {
+  color: var(--text-primary);
+}
+
 /* Hotkey switched off from the tray */
 #status-indicator[data-state="paused"] #status-dot {
   background: transparent;
@@ -319,6 +319,34 @@ button {
 .version-text {
   font-size: var(--text-caption);
   color: var(--text-faint);
+}
+
+/* A newer release: a small link under the version */
+.update-link {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--text-small);
+  font-weight: 500;
+  color: var(--accent-light);
+  text-align: left;
+  cursor: pointer;
+}
+
+.update-link:hover {
+  color: var(--text-primary);
+}
+
+.label-hint.update-note {
+  color: var(--accent-light);
+}
+
+/* A button next to a switch in one setting row */
+.setting-control.control-group {
+  align-items: center;
+  gap: 12px;
 }
 
 /* ── Content Area ───────────────────────────────────── */
@@ -1280,10 +1308,219 @@ input.log-search {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
+/* ── First-run Setup (src/setup.ts) ─────────────────── */
+
+.setup {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  background: var(--surface-canvas);
+  animation: fadeInOpacity 0.2s ease;
+}
+
+.setup-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 640px;
+  height: 100%;
+  padding: 24px 32px 20px;
+}
+
+.setup-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.setup-progress {
+  font-size: var(--text-small);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-skip {
+  margin-left: auto;
+  padding: 4px 2px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.setup-skip:hover {
+  color: var(--text-primary);
+}
+
+.setup-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -8px;
+  padding: 0 8px 12px;
+  animation: fadeIn 0.25s ease;
+}
+
+.setup-title {
+  font-family: var(--font-serif);
+  font-size: var(--text-heading);
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+}
+
+.setup-text {
+  font-size: var(--text-base);
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.setup-choices {
+  display: grid;
+  gap: 10px;
+}
+
+.setup-choices-row {
+  grid-template-columns: 1fr 1fr;
+}
+
+.setup-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 14px 16px;
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
+}
+
+.setup-choice:hover {
+  border-color: var(--border-hover);
+}
+
+.setup-choice[aria-checked="true"] {
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 1px var(--text-primary);
+}
+
+.setup-choice:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.setup-choice-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+
+.setup-choice-about {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.setup-choice-extra {
+  font-size: var(--text-small);
+  line-height: 1.4;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-choice-state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+}
+
+.setup-choice-state .progress {
+  display: block;
+  width: 180px;
+  margin-top: 0;
+}
+
+.setup-choice-state .local-error {
+  flex-basis: 100%;
+}
+
+.setup-done-mark {
+  font-size: var(--text-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.setup-done-mark::before {
+  content: '✓ ';
+}
+
+.setup-card {
+  margin-top: 16px;
+}
+
+.card.setup-card + .card.setup-card {
+  margin-top: 12px;
+}
+
+.setup-key {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 300px;
+}
+
+.setup-key input {
+  flex: 1;
+  min-width: 0;
+}
+
+.setup-hotkey {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+.setup-hotkey kbd {
+  height: 40px;
+  padding: 0 16px;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.setup-foot {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.setup-foot .btn {
+  min-width: 96px;
+}
+
 /* ── Utility ────────────────────────────────────────── */
 
 .hidden {
   display: none !important;
+}
+
+.invisible {
+  visibility: hidden;
 }
 
 /* Until the interface language is applied, so the window never flashes English */
@@ -1360,5 +1597,9 @@ input.log-search {
 
   .log-toolbar .segment {
     padding: 0 6px;
+  }
+
+  .setup-panel {
+    padding: 20px 24px 16px;
   }
 }

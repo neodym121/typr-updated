@@ -17,6 +17,8 @@ const en = {
   "status.error": "Error",
   "status.hotkeyOff": "Hotkey off",
   "status.hotkeyOffHint": "Turn it back on from the tray menu",
+  "status.fallback": "Transcribed locally",
+  "status.fallbackDetail": "{engine} failed, so the local model transcribed it: {error}",
 
   "general.title": "General",
   "general.desc": "Audio input and app preferences",
@@ -32,6 +34,21 @@ const en = {
   "general.advanced": "Advanced",
   "general.devMode": "Developer mode",
   "general.devModeHint": "Records everything the app does and shows it in the Developer section",
+  "general.autostart": "Start with Windows",
+  "general.autostartHint": "Typr starts in the tray when you sign in",
+  "general.updates": "Check for updates",
+  "general.updatesHint": "Looks for new releases on GitHub",
+  "general.updatesCheck": "Check now",
+  "general.updatesChecking": "Checking…",
+  "general.updatesLatest": "You have the latest version",
+  "general.updatesAvailable": "Version {version} is available",
+  "general.updatesError": "Couldn't check: {error}",
+  "general.updatesOpen": "Download",
+  "general.setup": "Setup wizard",
+  "general.setupHint": "Go through the first-run setup again",
+  "general.setupRun": "Open",
+
+  "sidebar.update": "Update to {version}",
 
   "engine.title": "Engine",
   "engine.desc": "A local model or a cloud service turns your speech into text",
@@ -52,6 +69,12 @@ const en = {
   "engine.assemblyaiKeyHint": "Get your key from assemblyai.com/dashboard",
   "engine.model": "Model",
   "engine.modelHint": "Speech recognition model",
+  "engine.speech": "Speech",
+  "engine.recognitionLanguage": "Language",
+  "engine.recognitionLanguageHint": "The language you dictate in. Detection works in most cases; a fixed language helps short phrases",
+  "engine.fallback": "Local fallback",
+  "engine.fallbackHint": "If the cloud fails, a downloaded local model transcribes the dictation; the next one goes to the cloud again. Needs a model from the Local tab",
+  "lang.auto": "Detect automatically",
 
   "local.unsupported": "Local recognition works on 64-bit Windows only",
   "local.models": "Models",
@@ -159,6 +182,39 @@ const en = {
   "developer.nothingToCopy": "Nothing to copy",
   "developer.copied": "Copied {count}",
   "developer.copyFailed": "Copy failed",
+
+  "setup.skip": "Skip setup",
+  "setup.back": "Back",
+  "setup.next": "Next",
+  "setup.finish": "Start dictating",
+  "setup.step": "Step {n} of {total}",
+  "setup.welcome": "Welcome to Typr",
+  "setup.welcomeText": "Speak, and Typr types it into any window. Setting it up takes a minute. First, the language of the interface:",
+  "setup.interfaceEn": "Interface in English",
+  "setup.interfaceRu": "Интерфейс на русском",
+  "setup.engineTitle": "How should speech become text?",
+  "setup.engineText": "You can change this any time in Engine.",
+  "setup.recommended": "Recommended",
+  "setup.engine.local": "Local model",
+  "setup.engine.localAbout": "Runs on this computer: free, works offline, the audio never leaves it. A one-time download, fastest with a graphics card.",
+  "setup.engine.localCpu": "This computer will run it on the processor: slower, but just as private and free.",
+  "setup.engine.groqAbout": "Whisper in the cloud: very fast and accurate. A free API key is enough to start; needs internet.",
+  "setup.engine.polzaAbout": "A Russian AI aggregator with many speech models, paid in rubles. Needs an API key.",
+  "setup.engine.assemblyaiAbout": "Accurate cloud recognition with free credits for new accounts. Universal-2 understands Russian.",
+  "setup.engine.openaiAbout": "OpenAI Whisper or your own server with the same API (whisper.cpp, faster-whisper and others).",
+  "setup.localTitle": "Download a model",
+  "setup.localText": "Parakeet suits most people. If you go on, the download continues in the background.",
+  "setup.downloaded": "Downloaded",
+  "setup.keyTitle": "Connect {engine}",
+  "setup.keyText": "Create an API key on the {engine} site and paste it below. It is kept on this computer only.",
+  "setup.getKey": "Get a key",
+  "setup.openaiTitle": "Connect a server",
+  "setup.openaiText": "The address of an OpenAI-compatible API, the model, and a key if the server needs one.",
+  "setup.assemblyaiRussian": "Universal-3.5 Pro doesn't understand Russian; choose Universal-2 for it.",
+  "setup.doneTitle": "Ready to dictate",
+  "setup.doneToggle": "Press the hotkey, speak, and press it again: the text is pasted where your cursor is.",
+  "setup.donePtt": "Hold the hotkey while you speak and release it: the text is pasted where your cursor is.",
+  "setup.hotkeyHint": "You can change the keys in Recording",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -176,6 +232,8 @@ const ru: Record<MessageKey, string> = {
   "status.error": "Ошибка",
   "status.hotkeyOff": "Хоткей выключен",
   "status.hotkeyOffHint": "Включите его снова в меню в трее",
+  "status.fallback": "Распознано локально",
+  "status.fallbackDetail": "{engine} не справился, поэтому распознала локальная модель: {error}",
 
   "general.title": "Основные",
   "general.desc": "Микрофон и настройки приложения",
@@ -191,6 +249,21 @@ const ru: Record<MessageKey, string> = {
   "general.advanced": "Дополнительно",
   "general.devMode": "Режим разработчика",
   "general.devModeHint": "Записывает всё, что делает приложение, и показывает это в разделе «Разработчик»",
+  "general.autostart": "Запускать вместе с Windows",
+  "general.autostartHint": "Typr запускается в трее при входе в систему",
+  "general.updates": "Проверять обновления",
+  "general.updatesHint": "Ищет новые версии на GitHub",
+  "general.updatesCheck": "Проверить",
+  "general.updatesChecking": "Проверка…",
+  "general.updatesLatest": "У вас последняя версия",
+  "general.updatesAvailable": "Доступна версия {version}",
+  "general.updatesError": "Не удалось проверить: {error}",
+  "general.updatesOpen": "Скачать",
+  "general.setup": "Мастер настройки",
+  "general.setupHint": "Пройти первоначальную настройку заново",
+  "general.setupRun": "Открыть",
+
+  "sidebar.update": "Обновить до {version}",
 
   "engine.title": "Распознавание",
   "engine.desc": "Локальная модель или облачный сервис превращает речь в текст",
@@ -211,6 +284,12 @@ const ru: Record<MessageKey, string> = {
   "engine.assemblyaiKeyHint": "Получите ключ на assemblyai.com/dashboard",
   "engine.model": "Модель",
   "engine.modelHint": "Модель распознавания речи",
+  "engine.speech": "Речь",
+  "engine.recognitionLanguage": "Язык речи",
+  "engine.recognitionLanguageHint": "На каком языке вы диктуете. Автоопределение подходит почти всегда, а конкретный язык помогает с короткими фразами",
+  "engine.fallback": "Запасной локальный движок",
+  "engine.fallbackHint": "Если облако не справится, диктовку распознает скачанная локальная модель; следующая снова пойдёт в облако. Нужна модель с вкладки «Локально»",
+  "lang.auto": "Определять автоматически",
 
   "local.unsupported": "Локальное распознавание работает только в 64-битной Windows",
   "local.models": "Модели",
@@ -318,6 +397,39 @@ const ru: Record<MessageKey, string> = {
   "developer.nothingToCopy": "Нечего копировать",
   "developer.copied": "Скопировано: {count}",
   "developer.copyFailed": "Не удалось скопировать",
+
+  "setup.skip": "Пропустить",
+  "setup.back": "Назад",
+  "setup.next": "Далее",
+  "setup.finish": "Начать диктовать",
+  "setup.step": "Шаг {n} из {total}",
+  "setup.welcome": "Добро пожаловать в Typr",
+  "setup.welcomeText": "Говорите — и Typr напечатает это в любом окне. Настройка займёт минуту. Сначала выберите язык интерфейса:",
+  "setup.interfaceEn": "Interface in English",
+  "setup.interfaceRu": "Интерфейс на русском",
+  "setup.engineTitle": "Как распознавать речь?",
+  "setup.engineText": "Это можно поменять в любой момент в разделе «Распознавание».",
+  "setup.recommended": "Рекомендуем",
+  "setup.engine.local": "Локальная модель",
+  "setup.engine.localAbout": "Работает на этом компьютере: бесплатно, без интернета, звук никуда не уходит. Модель скачивается один раз, быстрее всего с видеокартой.",
+  "setup.engine.localCpu": "На этом компьютере она будет работать на процессоре: медленнее, но так же приватно и бесплатно.",
+  "setup.engine.groqAbout": "Whisper в облаке: очень быстро и точно. Для начала хватит бесплатного ключа; нужен интернет.",
+  "setup.engine.polzaAbout": "Российский агрегатор нейросетей: много моделей распознавания, оплата в рублях. Нужен API-ключ.",
+  "setup.engine.assemblyaiAbout": "Точное облачное распознавание, новым аккаунтам дают бесплатные кредиты. Universal-2 понимает русский.",
+  "setup.engine.openaiAbout": "OpenAI Whisper или свой сервер с таким же API (whisper.cpp, faster-whisper и другие).",
+  "setup.localTitle": "Скачайте модель",
+  "setup.localText": "Parakeet подойдёт большинству. Если пойти дальше, загрузка продолжится в фоне.",
+  "setup.downloaded": "Скачана",
+  "setup.keyTitle": "Подключите {engine}",
+  "setup.keyText": "Создайте API-ключ на сайте {engine} и вставьте его ниже. Он хранится только на этом компьютере.",
+  "setup.getKey": "Получить ключ",
+  "setup.openaiTitle": "Подключите сервер",
+  "setup.openaiText": "Адрес API, совместимого с OpenAI, модель и ключ, если сервер его требует.",
+  "setup.assemblyaiRussian": "Universal-3.5 Pro не понимает русский — для него выберите Universal-2.",
+  "setup.doneTitle": "Можно диктовать",
+  "setup.doneToggle": "Нажмите горячие клавиши, говорите и нажмите их снова — текст вставится туда, где стоит курсор.",
+  "setup.donePtt": "Держите горячие клавиши, пока говорите, и отпустите — текст вставится туда, где стоит курсор.",
+  "setup.hotkeyHint": "Сочетание можно поменять в разделе «Запись»",
 };
 
 const dictionaries: Record<Lang, Record<MessageKey, string>> = { en, ru };
@@ -340,6 +452,27 @@ export function setLanguage(lang: Lang) {
   current = lang;
   document.documentElement.lang = lang;
   applyTranslations();
+}
+
+/** Codes offered for recognition, "" detects the language (settings.rs) */
+export const RECOGNITION_LANGUAGES = ["", "ru", "en", "uk", "de", "fr", "es", "it", "pt", "pl"];
+
+/** Name of a recognition language in the interface language, e.g. "Русский" */
+export function languageName(code: string): string {
+  if (!code) return t("lang.auto");
+  try {
+    const name = new Intl.DisplayNames([current], { type: "language" }).of(code) || code;
+    return name.charAt(0).toLocaleUpperCase(current) + name.slice(1);
+  } catch {
+    return code;
+  }
+}
+
+/** Fills a <select> with the recognition languages, keeping its value */
+export function fillLanguageOptions(select: HTMLSelectElement) {
+  const value = select.value;
+  select.replaceChildren(...RECOGNITION_LANGUAGES.map((code) => new Option(languageName(code), code)));
+  select.value = RECOGNITION_LANGUAGES.includes(value) ? value : "";
 }
 
 export function applyTranslations(root: ParentNode = document) {

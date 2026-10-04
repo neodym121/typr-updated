@@ -1,14 +1,17 @@
 use base64::Engine as _;
 use serde_json::json;
-use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::audio::{AudioFormat, EncodedAudio};
 use crate::net;
 
+pub const HOST: &str = "https://polza.ai";
 const POLZA_URL: &str = "https://polza.ai/api/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "openai/whisper-large-v3";
 /// Polza accepts request bodies up to ~15 MB
 const MAX_BODY_BYTES: usize = 14 * 1024 * 1024;
+/// Polza documents WAV uploads only, so it keeps getting WAV
+pub const FORMAT: AudioFormat = AudioFormat::Wav;
 
 /// Transcribe audio via Polza.AI aggregator.
 ///
@@ -20,25 +23,23 @@ pub async fn transcribe_polza(
     api_key: &str,
     model: &str,
     provider: &str,
-    audio_path: &PathBuf,
+    language: Option<&str>,
+    audio: &EncodedAudio,
 ) -> Result<String, String> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
         return Err("Polza API key not set. Please enter your API key in settings.".to_string());
     }
 
-    let audio_bytes = std::fs::read(audio_path)
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
-    let size_kb = audio_bytes.len() / 1024;
-
     let data_url = format!(
-        "data:audio/wav;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(&audio_bytes)
+        "data:{};base64,{}",
+        audio.format.mime(),
+        base64::engine::general_purpose::STANDARD.encode(&audio.bytes)
     );
     if data_url.len() > MAX_BODY_BYTES {
         return Err(format!(
             "Recording is too long for Polza ({} KB of audio, the limit is about 10 MB)",
-            size_kb
+            audio.size_kb()
         ));
     }
 
@@ -53,6 +54,9 @@ pub async fn transcribe_polza(
         "file": data_url,
         "response_format": "json"
     });
+    if let Some(language) = language {
+        body["language"] = json!(language);
+    }
 
     let provider = provider.trim();
     if !provider.is_empty() {
@@ -60,11 +64,12 @@ pub async fn transcribe_polza(
     }
 
     log::info!(
-        "Polza: POST {} (model {}, provider {}, {} KB)",
+        "Polza: POST {} (model {}, provider {}, language {}, {} KB)",
         POLZA_URL,
         model_name,
         if provider.is_empty() { "auto" } else { provider },
-        size_kb
+        language.unwrap_or("auto"),
+        audio.size_kb()
     );
     let started = Instant::now();
     let response = net::client()?
@@ -84,8 +89,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_api_key() {
-        let path = PathBuf::from("/tmp/test.wav");
-        let result = transcribe_polza("", "", "", &path).await;
+        let audio = EncodedAudio { bytes: Vec::new(), format: FORMAT };
+        let result = transcribe_polza("", "", "", None, &audio).await;
         assert!(result.unwrap_err().contains("API key not set"));
     }
 }

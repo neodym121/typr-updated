@@ -21,6 +21,7 @@ use super::catalog::{Backend, TRANSCRIBE_VERSION};
 // transcribe_status
 const OK: c_int = 0;
 const ERR_BACKEND: c_int = 8;
+const ERR_UNSUPPORTED_LANGUAGE: c_int = 10;
 const ERR_OUTPUT_TRUNCATED: c_int = 18;
 
 // transcribe_abi_struct
@@ -390,22 +391,33 @@ impl Api {
         self.device_info(unsafe { (self.model_device)(loaded.model) })
     }
 
-    /// Transcribes 16 kHz mono samples in [-1, 1]; the language is detected.
-    pub fn transcribe(&self, loaded: &mut Loaded, samples: &[f32]) -> Result<Transcript, CallError> {
+    /// Transcribes 16 kHz mono samples in [-1, 1]. `language` is a hint such
+    /// as "ru"; `None`, or a language the model doesn't list, detects it.
+    pub fn transcribe(&self, loaded: &mut Loaded, samples: &[f32], language: Option<&str>) -> Result<Transcript, CallError> {
         if samples.is_empty() || samples.len() > c_int::MAX as usize {
             return Err(CallError {
                 status: -1,
                 message: format!("Can't transcribe {} samples", samples.len()),
             });
         }
+        let hint = language.and_then(|code| CString::new(code).ok());
         let mut params: RunParams = unsafe { std::mem::zeroed() };
         unsafe { (self.run_params_init)(&mut params) };
         params.timestamps = TIMESTAMPS_NONE;
-        params.language = null();
+        params.language = hint.as_ref().map_or(null(), |code| code.as_ptr());
 
-        let status = unsafe {
-            (self.run)(loaded.session, samples.as_ptr(), samples.len() as c_int, &params)
+        let run = |params: &RunParams| unsafe {
+            (self.run)(loaded.session, samples.as_ptr(), samples.len() as c_int, params)
         };
+        let mut status = run(&params);
+        if status == ERR_UNSUPPORTED_LANGUAGE && hint.is_some() {
+            log::warn!(
+                "The model doesn't take the language '{}', detecting the language instead",
+                language.unwrap_or_default()
+            );
+            params.language = null();
+            status = run(&params);
+        }
         // These keep the (shortened) transcript readable
         let warning = match status {
             OK => None,

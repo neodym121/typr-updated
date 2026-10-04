@@ -10,7 +10,8 @@ Typr is a **desktop dictation app** built with [Tauri 2](https://tauri.app/) (Ru
 typr/
 ├── src/                        # TypeScript frontend (Vite)
 │   ├── main.ts                 # Main UI logic, settings form, hotkey binding
-│   ├── i18n.ts                 # English/Russian UI strings, t(), data-i18n attributes
+│   ├── setup.ts                # First-run setup wizard over the whole window
+│   ├── i18n.ts                 # English/Russian UI strings, t(), data-i18n attributes, recognition language names
 │   ├── dropdown.ts             # App-styled dropdowns over hidden native <select>s
 │   ├── postprocess.ts          # Post-processing section: provider, key, model list with search, styles
 │   ├── local.ts                # Engine → Local: models, acceleration, runtime components, unloading
@@ -20,8 +21,8 @@ typr/
 │   └── src/
 │       ├── lib.rs              # App entry — registers Tauri plugins, wires commands
 │       ├── main.rs             # Binary entry point
-│       ├── recorder.rs         # Orchestrates recording → transcription → paste flow
-│       ├── audio.rs            # Low-level audio capture (cpal)
+│       ├── recorder.rs         # Orchestrates recording → transcription → paste flow, local fallback
+│       ├── audio.rs            # Low-level audio capture (cpal), WAV/FLAC packing in memory
 │       ├── transcribe_groq.rs  # Groq Whisper API client
 │       ├── transcribe_openai.rs# OpenAI / OpenAI-compatible API client
 │       ├── transcribe_polza.rs # Polza.AI client (JSON body, base64 data URL)
@@ -37,10 +38,13 @@ typr/
 │       │   └── ffi.rs          # transcribe.dll loaded at run time (C API of v0.2.4)
 │       ├── keyboard.rs         # Hotkey must be pressed on its own (GetAsyncKeyState check)
 │       ├── i18n.rs             # System language detection, tray menu strings
-│       ├── net.rs              # Shared HTTP client (timeouts) + response/error helpers
+│       ├── net.rs              # One shared HTTP client (timeouts, kept-alive connections, warm-up) + response/error helpers
+│       ├── autostart.rs        # Start with Windows (HKCU Run value, `--autostart`)
+│       ├── updates.rs          # Latest GitHub release vs this version
+│       ├── links.rs            # Opens allowed web pages in the browser
 │       ├── logger.rs           # `log` backend feeding the Developer section
 │       ├── overlay.rs          # Recording indicator that slides in while dictating (native layered window on Windows)
-│       ├── cleanup.rs          # Post-processing: trims filler words, fixes punctuation
+│       ├── cleanup.rs          # Tidies the transcript: whitespace, capitals at sentence starts, final punctuation
 │       ├── paste.rs            # Pastes via the clipboard (Ctrl+V), then restores the previous content
 │       ├── postprocess.rs      # LLM post-processing: model lists, Gemini / OpenAI-compatible calls, prompts
 │       └── settings.rs         # Settings struct, load/save from config.json
@@ -59,20 +63,22 @@ typr/
 ### `recorder.rs` — Central orchestrator
 Manages the `RecordingState` state machine (`Ready → Recording → Transcribing → Ready`). On toggle:
 1. Starts audio capture via `AudioRecorder`
-2. Saves WAV to a temp file
+2. Packs the samples in memory for a cloud engine (FLAC for Groq, AssemblyAI and OpenAI itself; WAV for Polza and other OpenAI-compatible servers); nothing is written to disk
 3. Calls the configured transcription engine
-   (the local engine skips the WAV: the samples go straight to transcribe.cpp)
+   (the local engine takes the samples straight to transcribe.cpp). If a cloud engine fails for any reason, `fallbackLocal` is on and a local model is downloaded, the local model transcribes the recording instead (`transcription-fallback` event); the next dictation tries the cloud again
 4. Runs `cleanup_text()` on the result
 5. If post-processing is on, rewrites the text with `postprocess::process()`; on failure the transcribed text is pasted anyway and the error is reported afterwards
 6. Calls `paste_text()` to inject into the active window
 7. Emits `recording-state` events to the frontend and updates the overlay (the indicator slides in for Recording/Transcribing and back out on Ready)
 
 ### `settings.rs` — Configuration
-Persisted to `config.json` in the Tauri app data directory. Key fields:
-- `engine`: `"local"` | `"groq"` | `"openai"` | `"openai-compatible"` | `"polza"` | `"assemblyai"` (default: `"groq"`)
+Persisted to `config.json` in the Tauri app data directory (`TYPR_CONFIG_DIR` overrides the folder in debug builds). `#[serde(default)]` on the structs: a missing field takes its value from `Default`. Engine, recording mode, post-processing provider and preset are enums saved as string ids (`string_enum!`); an unknown id reads as the default instead of failing the file. Key fields:
+- `engine`: `"local"` | `"groq"` | `"openai"` (`"openai-compatible"` reads as it) | `"polza"` | `"assemblyai"` (default: `"groq"`)
 - `groqModel`: `"whisper-large-v3-turbo"` (default) | `"whisper-large-v3"`
 - `groqApiKey`, `openaiApiKey`, `openaiEndpoint`, `openaiModel`, `polzaApiKey`, `polzaModel`, `polzaProvider`, `assemblyaiApiKey`
 - `assemblyaiModel`: `"universal-3-5-pro"` (default, no Russian) | `"universal-2"`
+- `recognitionLanguage`: ISO 639-1 code of the speech (`RECOGNITION_LANGUAGES`), empty detects it. Sent as `language` (Groq, OpenAI, Polza), `language_code` (AssemblyAI) and the run params' `language` (local; a language the model doesn't list falls back to detection)
+- `fallbackLocal`: a failed cloud transcription goes to a downloaded local model (default `true`)
 - `localModel`: model id from `local/catalog.rs` used for dictation (default `"parakeet-tdt-0.6b-v3"`)
 - `localBackend`: `"vulkan"` | `"cpu"`, or empty for the one recommended for this computer
 - `localUnload`: when an idle model leaves memory: `"immediate"` | `"30s"` | `"5m"` (default) | `"10m"` | `"never"`
@@ -83,13 +89,18 @@ Persisted to `config.json` in the Tauri app data directory. Key fields:
 - `hotkey`: default `"Ctrl+Shift+Space"`
 - `appendSpace`: adds a space after the pasted text (default `false`, switch in Post-processing; works with post-processing off too)
 - `showIndicator`: whether the recording indicator may appear at all (default `true`, switch in General)
+- `checkUpdates`: looks for a newer GitHub release 15 s after start and every 12 h (default `true`)
+- `setupDone`: the first-run wizard was finished or skipped; `false` only for a new config (a config file without the field counts as set up)
 - `postProcess`: `enabled` (default `false`), `provider` (`"gemini"` | `"openrouter"` | `"groq"` | `"polza"`), `preset` (`"chill"` | `"proper"` | `"custom"`; the old `"official"` is migrated to `"proper"` on load), `customPrompt`, and `{ apiKey, model }` per provider, plus `providerId` for Polza (sub-provider sent as `provider.only`, omitted from the file when empty). Groq and Polza fall back to the Engine key when their own is empty (`Settings::post_process_key`)
 
 ### `transcribe_groq.rs` / `transcribe_openai.rs`
-Both send a multipart form POST with the WAV file to the respective API. `transcribe_openai.rs` is also used for any OpenAI-compatible endpoint (e.g. local Whisper servers) via the configurable `openaiEndpoint`.
+Both send a multipart form POST with the recording (`audio::EncodedAudio`) to the respective API. `transcribe_openai.rs` is also used for any OpenAI-compatible endpoint (e.g. local Whisper servers) via the configurable `openaiEndpoint`; those get WAV, only `api.openai.com` gets FLAC.
+
+### `net.rs` — one HTTP client
+`net::client()` returns one `reqwest::Client` for the whole app, so connections stay open between dictations. `recorder::warm_up_connections` sends a HEAD request (no credentials) to the engine's and post-processing's servers when a dictation starts, so the TLS handshake happens while the user speaks.
 
 ### `transcribe_assemblyai.rs`
-Three steps: `POST /v2/upload` with the raw WAV, `POST /v2/transcript` with `speech_models: [model]` and `language_detection: true`, then poll `GET /v2/transcript/{id}` until `completed` or `error`. Universal-3.5 Pro supports 18 languages without Russian; if it rejects the language, the error suggests Universal-2.
+Three steps: `POST /v2/upload` with the raw FLAC, `POST /v2/transcript` with `speech_models: [model]` and `language_code` (or `language_detection: true` when no language is set), then poll `GET /v2/transcript/{id}` until `completed` or `error`. Universal-3.5 Pro supports 18 languages without Russian; if it rejects the language, the error suggests Universal-2.
 
 ### `local/` — local recognition (transcribe.cpp)
 - Nothing native is compiled with Typr. `ffi.rs` loads `transcribe.dll` with LoadLibrary from the **runtime** downloaded on demand, mirrors the v0.2.4 C header (`include/transcribe.h` at the tag) and refuses a DLL whose version or struct sizes (`transcribe_abi_struct_size`) differ. Bump `TRANSCRIBE_VERSION`/`HEADER_HASH` in `catalog.rs`, the structs in `ffi.rs` and the pinned bundle together.
@@ -120,7 +131,15 @@ On `ShortcutState::Pressed` with the recorder `Ready`, `HotkeyKeys::extra_keys_h
 `src/i18n.ts` holds the English and Russian strings. Static markup uses `data-i18n` (text), `data-i18n-placeholder` and `data-i18n-title`; code uses `t(key)`. New UI text must get keys in both dictionaries. The `language` setting picks the language; when empty, `get_system_language` (Rust, `sys-locale`) decides: Russian for ru, uk, be, kk, ky, tg, uz, tk, hy, az, English otherwise. The tray menu is translated in `i18n.rs`. Backend error messages and logs stay in English. The page is hidden (`.i18n-pending`) until the language is applied.
 
 ### `cleanup.rs`
-Strips common transcription artifacts (leading/trailing filler, repeated punctuation, etc.) before the text is pasted.
+Collapses whitespace, capitalizes the first letter of every sentence and adds a final period. A sentence ends at `.`, `!` or `?` followed by a space, not inside numbers (3.14), addresses (example.com) or abbreviations (т.е., e.g., см.), and not after an ellipsis. Words that already have a capital (iPhone) are left alone; a trailing comma becomes the period.
+
+### Tray menu, autostart, updates
+- Tray: Open settings, Paste last dictation (the last text goes back into the window it was pasted into; if that window is gone, it is put on the clipboard), Engine submenu (switches `engine`, the window follows through `engine-changed`), Hotkey On/Off, Exit, and a "Version X is available" item added on top once an update is found.
+- The main window is `"create": false` in tauri.conf.json and built in `setup`; started with `--autostart` (the Run value from `autostart.rs`), Typr stays in the tray unless the setup isn't done. `autostart::refresh` repoints the Run value at the current executable (release builds only).
+- `updates::check` reads `releases/latest` of `neodym121/typr-updated`; the result is kept in `AppState.update`, sent as `update-available` and shown in the sidebar and General. `links::open` opens only the release page and the providers' key pages.
+
+### `setup.ts` — first-run wizard
+Shown while `setupDone` is false (and from General → Advanced): interface language, engine (Local recommended when Vulkan is available, else Groq), the engine's model download or API key plus the speech language, then hotkey, recording mode, start with Windows and update checks. Finish or Skip sets `setupDone`.
 
 ### `logger.rs` — Developer section
 Installed as the global `log` backend in `main()`. Use `log::info!` / `log::warn!` / `log::error!` / `log::debug!` everywhere in Rust (not `println!`). While `developerMode` is on, entries go to a 5000-entry ring buffer and are streamed to the main window as `log-entry` events; the frontend forwards its own console output via the `frontend_log` command. Never log API keys — use `Settings::summary()` / `describe_changes()`, which mask them.
@@ -131,7 +150,8 @@ Installed as the global `log` backend in `main()`. Use `log::info!` / `log::warn
 - `overlay.rs` draws the recording indicator itself on Windows (`windows-sys` layered window, per-pixel alpha, SDF rendering) — no WebView. Other platforms fall back to the WebView overlay `src/overlay.html`.
 - The indicator is out of sight while idle: its window starts at the top edge of the primary screen and the disc is drawn above that edge, so it slides in from behind the screen when a dictation starts (or briefly after an error) and slides back out on `Ready`. Once fully out, the window is hidden and its timers stop, so it costs no CPU.
 - `overlay::set_enabled` gates it: `main.rs::sync_overlay` allows it only while `showIndicator` is on and the hotkey is on in the tray.
-- Closing the main window destroys it (and its WebView); `show_main_window` re-creates it from `tauri.conf.json` on a separate thread (building windows in event handlers deadlocks on Windows). `RunEvent::ExitRequested` without a code is prevented, so Typr keeps running in the tray; tray → Exit calls `app.exit(0)`.
+- Closing the main window destroys it (and its WebView); `show_main_window` re-creates it from `tauri.conf.json` on a separate thread (building windows in event handlers deadlocks on Windows).
+- The page runs under a strict CSP (`tauri.conf.json`): scripts from the app only, styles and fonts also from Google Fonts, IPC. New external resources need a CSP entry. `RunEvent::ExitRequested` without a code is prevented, so Typr keeps running in the tray; tray → Exit calls `app.exit(0)`.
 - The tray menu's "Hotkey: On/Off" item unregisters the global shortcut, cancels an unfinished recording and keeps the overlay from appearing (e.g. while gaming). The state is not persisted.
 
 ---

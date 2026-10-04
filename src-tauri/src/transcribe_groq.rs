@@ -1,17 +1,22 @@
 use reqwest::multipart;
-use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::audio::{AudioFormat, EncodedAudio};
 use crate::net;
 
+pub const HOST: &str = "https://api.groq.com";
 const GROQ_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
+/// Groq accepts FLAC, which uploads faster than WAV
+pub const FORMAT: AudioFormat = AudioFormat::Flac;
 
 /// `model` is "whisper-large-v3-turbo" (faster) or "whisper-large-v3".
+/// `language` is an ISO 639-1 code; `None` lets Whisper detect it.
 pub async fn transcribe_groq(
     api_key: &str,
     model: &str,
-    audio_path: &PathBuf,
+    language: Option<&str>,
+    audio: &EncodedAudio,
 ) -> Result<String, String> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
@@ -22,21 +27,27 @@ pub async fn transcribe_groq(
         other => other,
     };
 
-    let audio_bytes = std::fs::read(audio_path)
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
-    let size_kb = audio_bytes.len() / 1024;
-
-    let file_part = multipart::Part::bytes(audio_bytes)
-        .file_name("audio.wav")
-        .mime_str("audio/wav")
+    let file_part = multipart::Part::bytes(audio.bytes.clone())
+        .file_name(audio.format.file_name())
+        .mime_str(audio.format.mime())
         .map_err(|e| e.to_string())?;
 
-    let form = multipart::Form::new()
+    let mut form = multipart::Form::new()
         .text("model", model.to_string())
         .text("response_format", "json")
         .part("file", file_part);
+    if let Some(language) = language {
+        form = form.text("language", language.to_string());
+    }
 
-    log::info!("Groq: POST {} (model {}, {} KB)", GROQ_URL, model, size_kb);
+    log::info!(
+        "Groq: POST {} (model {}, language {}, {} KB {:?})",
+        GROQ_URL,
+        model,
+        language.unwrap_or("auto"),
+        audio.size_kb(),
+        audio.format
+    );
     let started = Instant::now();
     let response = net::client()?
         .post(GROQ_URL)
@@ -55,9 +66,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_api_key() {
-        let path = PathBuf::from("/tmp/test.wav");
-        let result = transcribe_groq("", "", &path).await;
-        assert!(result.is_err());
+        let audio = EncodedAudio { bytes: Vec::new(), format: FORMAT };
+        let result = transcribe_groq("", "", None, &audio).await;
         assert!(result.unwrap_err().contains("API key not set"));
     }
 }

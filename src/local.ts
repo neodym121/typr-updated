@@ -3,7 +3,8 @@
 // components it needs, and when an idle model leaves memory.
 // The settings live in the app's settings object; this module edits them in
 // place and asks the host to save. Everything else comes from the backend
-// (local_status) and is re-read whenever it reports a change.
+// (local_status) and is re-read whenever it reports a change. The setup
+// wizard reads the same state through localState() and onLocalChange().
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -12,7 +13,7 @@ import { getLanguage, t, type MessageKey } from "./i18n";
 
 type Backend = "vulkan" | "cpu";
 
-interface ModelStatus {
+export interface ModelStatus {
   id: string;
   name: string;
   size: number;
@@ -37,7 +38,7 @@ interface LoadedView {
   fallback: string | null;
 }
 
-interface DownloadProgress {
+export interface DownloadProgress {
   key: string;
   state: "downloading" | "installing" | "done" | "error" | "cancelled";
   downloaded: number;
@@ -45,7 +46,7 @@ interface DownloadProgress {
   error: string | null;
 }
 
-interface LocalStatus {
+export interface LocalStatus {
   supported: boolean;
   models: ModelStatus[];
   backends: BackendStatus[];
@@ -68,7 +69,7 @@ export interface LocalHost {
   save: () => void;
 }
 
-const BADGES: Record<string, MessageKey> = {
+export const BADGES: Record<string, MessageKey> = {
   "parakeet-tdt-0.6b-v3": "local.recommended",
   "whisper-large-v3": "local.accurate",
 };
@@ -99,13 +100,19 @@ const errors = new Map<string, string>();
 /** Delete buttons waiting for a second click */
 const confirming = new Set<string>();
 let refreshTimer: number | undefined;
+/** Called whenever the status, a download or an error changes */
+const listeners = new Set<() => void>();
+
+function notify() {
+  listeners.forEach((listener) => listener());
+}
 
 function settings(): LocalSettings {
   return host!.settings();
 }
 
 /** Decimal units, as Hugging Face and the model docs show them (740 MB) */
-function formatSize(bytes: number): string {
+export function formatSize(bytes: number): string {
   const locale = getLanguage() === "ru" ? "ru-RU" : "en-US";
   const mb = bytes / 1e6;
   if (mb >= 1000) {
@@ -124,7 +131,7 @@ function button(label: string, onClick: () => void, extra = ""): HTMLButtonEleme
   return el;
 }
 
-function progressText(progress: DownloadProgress): string {
+export function progressText(progress: DownloadProgress): string {
   if (progress.state === "installing") return t("local.installing");
   if (!progress.total) {
     return progress.downloaded > 0 ? formatSize(progress.downloaded) : t("local.starting");
@@ -376,6 +383,7 @@ function render() {
   renderBackends();
   renderRuntime();
   renderRuntimeProblem();
+  notify();
 }
 
 // ── Actions ──────────────────────────────────────────
@@ -419,7 +427,7 @@ async function downloadRuntime() {
   await start(RUNTIME_KEY, "local_download_runtime");
 }
 
-async function downloadModel(id: string) {
+export async function downloadModel(id: string) {
   // The components are needed too; fetch them alongside the first model
   if (status && !status.runtime.installed && !downloads.has(RUNTIME_KEY)) {
     void downloadRuntime();
@@ -427,11 +435,11 @@ async function downloadModel(id: string) {
   await start(`model:${id}`, "local_download_model", { id });
 }
 
-function cancelDownload(key: string) {
+export function cancelDownload(key: string) {
   invoke("local_cancel_download", { key }).catch((err) => console.error("Failed to cancel:", err));
 }
 
-function chooseModel(id: string) {
+export function chooseModel(id: string) {
   settings().localModel = id;
   host!.save();
   render();
@@ -463,7 +471,9 @@ async function deleteRuntime() {
 function onProgress(progress: DownloadProgress) {
   const finished = progress.state === "done" || progress.state === "error" || progress.state === "cancelled";
   if (!finished) {
-    if (!updateInPlace(progress)) {
+    if (updateInPlace(progress)) {
+      notify();
+    } else {
       downloads.set(progress.key, progress);
       render();
     }
@@ -530,4 +540,20 @@ export function showLocalComponents() {
 /** Texts set from code, after a language switch. */
 export function translateLocal() {
   render();
+}
+
+/** What the backend reported last, for the setup wizard */
+export function localState() {
+  return { status, downloads, errors };
+}
+
+/** Re-reads the status from the backend */
+export function refreshLocal() {
+  return refresh();
+}
+
+/** Calls `listener` whenever the local state changes; returns the unsubscribe */
+export function onLocalChange(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }

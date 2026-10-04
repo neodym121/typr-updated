@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use hound::{WavSpec, WavWriter};
-use std::path::PathBuf;
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 /// Whisper works on 16 kHz mono audio
@@ -202,35 +202,108 @@ impl AudioRecorder {
     }
 }
 
-/// Writes 16 kHz mono 16-bit PCM and returns the file size in bytes.
-pub fn write_wav(path: &PathBuf, audio: &CapturedAudio) -> Result<u64, String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create folder {}: {}", parent.display(), e))?;
+/// How a recording is packed for a cloud service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioFormat {
+    Wav,
+    /// Lossless and about half the size of WAV, so it uploads faster
+    Flac,
+}
+
+impl AudioFormat {
+    pub fn mime(self) -> &'static str {
+        match self {
+            AudioFormat::Wav => "audio/wav",
+            AudioFormat::Flac => "audio/flac",
+        }
     }
 
+    pub fn file_name(self) -> &'static str {
+        match self {
+            AudioFormat::Wav => "audio.wav",
+            AudioFormat::Flac => "audio.flac",
+        }
+    }
+}
+
+/// A recording as a file in memory, ready to upload.
+pub struct EncodedAudio {
+    pub bytes: Vec<u8>,
+    pub format: AudioFormat,
+}
+
+impl EncodedAudio {
+    pub fn size_kb(&self) -> usize {
+        self.bytes.len() / 1024
+    }
+}
+
+/// Packs 16 kHz mono samples as `format`. FLAC falls back to WAV if the
+/// encoder fails, so a dictation never fails for that.
+pub fn encode(samples: &[f32], format: AudioFormat) -> Result<EncodedAudio, String> {
+    let started = std::time::Instant::now();
+    let encoded = match format {
+        AudioFormat::Flac => match encode_flac(samples) {
+            Ok(bytes) => EncodedAudio { bytes, format },
+            Err(e) => {
+                log::warn!("FLAC encoding failed, sending WAV instead: {}", e);
+                EncodedAudio { bytes: encode_wav(samples)?, format: AudioFormat::Wav }
+            }
+        },
+        AudioFormat::Wav => EncodedAudio { bytes: encode_wav(samples)?, format },
+    };
+    log::debug!(
+        "Audio packed as {:?}: {} KB in {} ms",
+        encoded.format,
+        encoded.size_kb(),
+        started.elapsed().as_millis()
+    );
+    Ok(encoded)
+}
+
+fn to_pcm16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+}
+
+/// 16 kHz mono 16-bit PCM WAV.
+pub fn encode_wav(samples: &[f32]) -> Result<Vec<u8>, String> {
     let spec = WavSpec {
         channels: 1,
         sample_rate: TARGET_SAMPLE_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-
-    let mut writer = WavWriter::create(path, spec)
-        .map_err(|e| format!("Failed to create WAV file {}: {}", path.display(), e))?;
-    for &sample in audio.samples.iter() {
-        let amplitude = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+    let mut buffer = Cursor::new(Vec::with_capacity(44 + samples.len() * 2));
+    let mut writer = WavWriter::new(&mut buffer, spec)
+        .map_err(|e| format!("Failed to start the WAV data: {}", e))?;
+    for &sample in samples {
         writer
-            .write_sample(amplitude)
+            .write_sample(to_pcm16(sample))
             .map_err(|e| format!("Failed to write WAV data: {}", e))?;
     }
     writer
         .finalize()
-        .map_err(|e| format!("Failed to finalize WAV file: {}", e))?;
+        .map_err(|e| format!("Failed to finish the WAV data: {}", e))?;
+    Ok(buffer.into_inner())
+}
 
-    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    log::debug!("WAV saved to {} ({} KB)", path.display(), size / 1024);
-    Ok(size)
+/// 16 kHz mono 16-bit FLAC.
+pub fn encode_flac(samples: &[f32]) -> Result<Vec<u8>, String> {
+    use flacenc::component::BitRepr;
+    use flacenc::error::Verify;
+
+    let pcm: Vec<i32> = samples.iter().map(|&s| to_pcm16(s) as i32).collect();
+    let config = flacenc::config::Encoder::default()
+        .into_verified()
+        .map_err(|(_, e)| format!("Invalid FLAC settings: {:?}", e))?;
+    let source = flacenc::source::MemSource::from_samples(&pcm, 1, 16, TARGET_SAMPLE_RATE as usize);
+    let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+        .map_err(|e| format!("FLAC encoding failed: {:?}", e))?;
+    let mut sink = flacenc::bitsink::ByteSink::new();
+    stream
+        .write(&mut sink)
+        .map_err(|e| format!("FLAC writing failed: {:?}", e))?;
+    Ok(sink.into_inner())
 }
 
 fn find_input_device(host: &cpal::Host, name: &str) -> Result<Option<cpal::Device>, String> {
@@ -290,6 +363,38 @@ mod tests {
     #[test]
     fn test_resample_empty_input() {
         assert!(resample(&[], 48000, 16000).is_empty());
+    }
+
+    /// A second of a 440 Hz tone with a little noise, like speech it is not
+    /// silent and compresses well
+    fn tone() -> Vec<f32> {
+        (0..TARGET_SAMPLE_RATE)
+            .map(|i| {
+                let t = i as f32 / TARGET_SAMPLE_RATE as f32;
+                0.3 * (t * 440.0 * std::f32::consts::TAU).sin() + 0.01 * ((i * 7919 % 101) as f32 / 101.0 - 0.5)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_wav_in_memory() {
+        let samples = tone();
+        let wav = encode_wav(&samples).unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(wav.len(), 44 + samples.len() * 2);
+        let reader = hound::WavReader::new(Cursor::new(wav)).unwrap();
+        assert_eq!(reader.spec().sample_rate, TARGET_SAMPLE_RATE);
+        assert_eq!(reader.len() as usize, samples.len());
+    }
+
+    #[test]
+    fn test_flac_is_smaller_than_wav() {
+        let samples = tone();
+        let flac = encode(&samples, AudioFormat::Flac).unwrap();
+        assert_eq!(flac.format, AudioFormat::Flac);
+        assert_eq!(&flac.bytes[..4], b"fLaC");
+        assert!(flac.bytes.len() < encode_wav(&samples).unwrap().len() * 3 / 4);
+        assert_eq!(flac.format.mime(), "audio/flac");
     }
 
     #[test]

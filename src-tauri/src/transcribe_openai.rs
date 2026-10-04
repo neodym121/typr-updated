@@ -1,25 +1,33 @@
 use reqwest::multipart;
-use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::audio::{AudioFormat, EncodedAudio};
 use crate::net;
 
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1";
 const DEFAULT_MODEL: &str = "whisper-1";
 
+/// OpenAI itself takes FLAC; other OpenAI-compatible servers (whisper.cpp,
+/// local Whisper servers) may read only WAV, so they get WAV.
+pub fn format_for(endpoint: &str) -> AudioFormat {
+    if transcriptions_url(endpoint).starts_with("https://api.openai.com/") {
+        AudioFormat::Flac
+    } else {
+        AudioFormat::Wav
+    }
+}
+
+/// `language` is an ISO 639-1 code; `None` lets the model detect it.
 pub async fn transcribe_openai(
     endpoint: &str,
     model: &str,
     api_key: &str,
-    audio_path: &PathBuf,
+    language: Option<&str>,
+    audio: &EncodedAudio,
 ) -> Result<String, String> {
-    let audio_bytes = std::fs::read(audio_path)
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
-    let size_kb = audio_bytes.len() / 1024;
-
-    let file_part = multipart::Part::bytes(audio_bytes)
-        .file_name("audio.wav")
-        .mime_str("audio/wav")
+    let file_part = multipart::Part::bytes(audio.bytes.clone())
+        .file_name(audio.format.file_name())
+        .mime_str(audio.format.mime())
         .map_err(|e| e.to_string())?;
 
     let model_name = if model.trim().is_empty() {
@@ -30,13 +38,15 @@ pub async fn transcribe_openai(
 
     let url = transcriptions_url(endpoint);
 
-    let form = multipart::Form::new()
+    let mut form = multipart::Form::new()
         .text("model", model_name.to_string())
         .text("response_format", "json")
         .part("file", file_part);
+    if let Some(language) = language {
+        form = form.text("language", language.to_string());
+    }
 
-    let client = net::client()?;
-    let mut request = client.post(&url);
+    let mut request = net::client()?.post(&url);
 
     let api_key = api_key.trim();
     if !api_key.is_empty() {
@@ -44,10 +54,12 @@ pub async fn transcribe_openai(
     }
 
     log::info!(
-        "OpenAI Compatible: POST {} (model {}, {} KB, API key {})",
+        "OpenAI Compatible: POST {} (model {}, language {}, {} KB {:?}, API key {})",
         url,
         model_name,
-        size_kb,
+        language.unwrap_or("auto"),
+        audio.size_kb(),
+        audio.format,
         if api_key.is_empty() { "not set" } else { "set" }
     );
     let started = Instant::now();
@@ -67,7 +79,7 @@ pub async fn transcribe_openai(
 
 /// Accepts either a base URL (`https://host/v1`) or the full
 /// `/audio/transcriptions` URL.
-fn transcriptions_url(endpoint: &str) -> String {
+pub fn transcriptions_url(endpoint: &str) -> String {
     let base = if endpoint.trim().is_empty() {
         DEFAULT_ENDPOINT
     } else {
@@ -99,5 +111,12 @@ mod tests {
             transcriptions_url("https://host/v1/audio/transcriptions"),
             "https://host/v1/audio/transcriptions"
         );
+    }
+
+    #[test]
+    fn test_only_openai_itself_gets_flac() {
+        assert_eq!(format_for(""), AudioFormat::Flac);
+        assert_eq!(format_for("https://api.openai.com/v1"), AudioFormat::Flac);
+        assert_eq!(format_for("http://localhost:8080/v1"), AudioFormat::Wav);
     }
 }

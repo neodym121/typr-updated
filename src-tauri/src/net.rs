@@ -1,18 +1,52 @@
-//! HTTP helpers shared by the transcription clients.
+//! HTTP helpers shared by the transcription and post-processing clients.
 
 use std::error::Error;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// An open connection waits this long for the next request
+const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const WARM_UP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Client with timeouts, so a stalled connection can never hang a dictation.
-pub fn client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))
+/// One client for the whole app: its connections stay open between requests,
+/// so a dictation doesn't pay for a new TLS handshake every time. Timeouts
+/// make sure a stalled connection never hangs a dictation.
+pub fn client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .pool_idle_timeout(IDLE_TIMEOUT)
+                .user_agent(concat!("Typr/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))
+        })
+        .as_ref()
+        .map_err(|e| e.clone())
+}
+
+/// Opens a connection to the server of `url` in the background (a HEAD
+/// request without credentials), so the request that follows finds it ready.
+/// Called when a dictation starts: the handshake happens while the user speaks.
+pub fn warm_up(url: String) {
+    let Ok(client) = client() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        let started = Instant::now();
+        match client.head(&url).timeout(WARM_UP_TIMEOUT).send().await {
+            Ok(_) => log::debug!(
+                "Connection to {} ready in {} ms",
+                url,
+                started.elapsed().as_millis()
+            ),
+            Err(e) => log::debug!("Could not warm up {}: {}", url, describe_error(&e)),
+        }
+    });
 }
 
 /// reqwest's own message is just "error sending request"; this adds the
