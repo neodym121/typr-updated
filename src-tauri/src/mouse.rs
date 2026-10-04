@@ -4,6 +4,12 @@
 //! button is swallowed, so it doesn't also go back in the browser while it
 //! starts a dictation. The hook exists only while a mouse hotkey is active:
 //! with a keyboard hotkey, or the hotkey off in the tray, nothing is hooked.
+//!
+//! A release is swallowed only after its press was: if the hook appears
+//! while the button is down (it was just chosen as the hotkey with a click),
+//! the release goes on to the window that got the press. Otherwise that
+//! window keeps the mouse captured and Windows thinks the button is held,
+//! and the mouse stops working everywhere else.
 
 /// Mouse buttons that can be the hotkey. The left and right buttons can't:
 /// they are needed for everything else.
@@ -48,7 +54,7 @@ impl MouseButton {
 #[cfg(target_os = "windows")]
 mod imp {
     use super::MouseButton;
-    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
     use std::sync::mpsc::{self, Sender};
     use std::sync::Mutex;
     use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -63,6 +69,9 @@ mod imp {
 
     /// `MouseButton::code` of the bound button, 0 for none
     static BUTTON: AtomicU8 = AtomicU8::new(0);
+    /// The hook swallowed the press of the bound button, so it swallows its
+    /// release too
+    static HELD: AtomicBool = AtomicBool::new(false);
     /// Presses (true) and releases (false) on their way to the handler
     static EVENTS: Mutex<Option<Sender<bool>>> = Mutex::new(None);
     /// The thread that owns the hook and runs its message loop
@@ -95,10 +104,19 @@ mod imp {
                 let info = &*(lparam as *const MSLLHOOKSTRUCT);
                 // Clicks simulated by other programs are left alone
                 if button == bound && info.flags & LLMHF_INJECTED == 0 {
-                    if let Some(events) = lock(&EVENTS).as_ref() {
-                        let _ = events.send(pressed);
+                    let swallow = if pressed {
+                        HELD.store(true, Ordering::SeqCst);
+                        true
+                    } else {
+                        // A release whose press went to a window goes there too
+                        HELD.swap(false, Ordering::SeqCst)
+                    };
+                    if swallow {
+                        if let Some(events) = lock(&EVENTS).as_ref() {
+                            let _ = events.send(pressed);
+                        }
+                        return 1;
                     }
-                    return 1;
                 }
             }
         }
@@ -119,6 +137,7 @@ mod imp {
             })
             .map_err(|e| format!("Failed to start the mouse hotkey: {}", e))?;
         *lock(&EVENTS) = Some(events);
+        HELD.store(false, Ordering::SeqCst);
         BUTTON.store(button.code(), Ordering::SeqCst);
 
         let (ready, started) = mpsc::channel::<Result<u32, String>>();

@@ -937,6 +937,7 @@ function startHotkeyRecording() {
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("keyup", onKeyUp, true);
     window.removeEventListener("mousedown", onMouseDown, true);
+    window.removeEventListener("mouseup", onMouseUp, true);
     saveSettings()
       .then(() => {
         cleanup();
@@ -983,18 +984,27 @@ function startHotkeyRecording() {
   };
 
   // The middle or a side mouse button becomes the hotkey on its own;
-  // any other click outside the button cancels
+  // any other click outside the button cancels. The button is saved once it
+  // is released: the hook that takes it over must not catch this release
+  let pressedMouse = -1;
   const onMouseDown = (e: MouseEvent) => {
-    const mouseHotkey = MOUSE_HOTKEYS[e.button];
-    if (mouseHotkey && pressedKeys.size === 0) {
+    if (MOUSE_HOTKEYS[e.button] && pressedKeys.size === 0) {
       e.preventDefault();
       e.stopPropagation();
-      saveHotkey(mouseHotkey);
+      pressedMouse = e.button;
       return;
     }
     if (!hotkeyBtn.contains(e.target as Node)) {
       cleanup();
     }
+  };
+
+  const onMouseUp = (e: MouseEvent) => {
+    if (e.button !== pressedMouse) return;
+    e.preventDefault();
+    e.stopPropagation();
+    pressedMouse = -1;
+    saveHotkey(MOUSE_HOTKEYS[e.button]);
   };
 
   const cleanup = () => {
@@ -1003,6 +1013,7 @@ function startHotkeyRecording() {
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("keyup", onKeyUp, true);
     window.removeEventListener("mousedown", onMouseDown, true);
+    window.removeEventListener("mouseup", onMouseUp, true);
     hotkeyHint.textContent = t("recording.hotkeyHint");
     displayHotkey(currentSettings.hotkey);
   };
@@ -1010,6 +1021,7 @@ function startHotkeyRecording() {
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("keyup", onKeyUp, true);
   window.addEventListener("mousedown", onMouseDown, true);
+  window.addEventListener("mouseup", onMouseUp, true);
 }
 
 // The side mouse buttons never navigate the settings page back or forward
