@@ -37,6 +37,7 @@ typr/
 │       │   ├── worker.rs       # The recognition process (`typr --local-recognition`) and Typr's side of it
 │       │   └── ffi.rs          # transcribe.dll loaded at run time (C API of v0.2.4)
 │       ├── keyboard.rs         # Hotkey must be pressed on its own (GetAsyncKeyState check)
+│       ├── mouse.rs            # A mouse button (middle, back, forward) as the hotkey, low-level mouse hook
 │       ├── i18n.rs             # System language detection, tray menu strings
 │       ├── net.rs              # One shared HTTP client (timeouts, kept-alive connections, warm-up) + response/error helpers
 │       ├── autostart.rs        # Start with Windows (HKCU Run value, `--autostart`)
@@ -86,7 +87,7 @@ Persisted to `config.json` in the Tauri app data directory (`TYPR_CONFIG_DIR` ov
 - `developerMode`: shows the Developer section and turns log collection on
 - `microphone`: device name or `"default"`
 - `recordingMode`: `"toggle"` | `"push-to-talk"`
-- `hotkey`: default `"Ctrl+Shift+Space"`
+- `hotkey`: default `"Ctrl+Shift+Space"`; or a single mouse button: `"MouseMiddle"` | `"MouseBack"` | `"MouseForward"`
 - `appendSpace`: adds a space after the pasted text (default `false`, switch in Post-processing; works with post-processing off too)
 - `showIndicator`: whether the recording indicator may appear at all (default `true`, switch in General)
 - `checkUpdates`: looks for a newer GitHub release 15 s after start and every 12 h (default `true`)
@@ -123,6 +124,9 @@ Saves the clipboard (text, else image, else nothing), sets the dictated text wit
 
 ### `dropdown.ts`
 `enhanceSelect(select)` hides a native `<select>` and draws an app-styled button and list over it; the `<select>` stays the source of truth (`.value`, `change` events), option rebuilds are picked up by a `MutationObserver`, and after setting `.value` from code call `syncSelect(select)`. New `<select>`s should be enhanced too.
+
+### `mouse.rs` — a mouse button as the hotkey
+`register_hotkey` (main.rs) sends key combinations to the global shortcut plugin and a mouse hotkey to `mouse::start`: a `WH_MOUSE_LL` hook on its own thread with a message loop. The hook proc only matches the bound button (ignoring injected clicks), swallows it (so "back" doesn't navigate the browser) and hands press/release to a handler thread; both paths end in `on_hotkey`. The hook exists only while a mouse hotkey is active (`unregister_hotkey` removes it, e.g. when the hotkey is turned off in the tray). The left and right buttons can't be the hotkey.
 
 ### `keyboard.rs` — hotkey pressed on its own
 On `ShortcutState::Pressed` with the recorder `Ready`, `HotkeyKeys::extra_keys_held()` reads every key and mouse button via `GetAsyncKeyState`; if anything besides the hotkey's own keys is down, the press is ignored (logged). Stopping a recording is never blocked.

@@ -17,7 +17,7 @@ Typr is a lightweight desktop dictation app for Windows. Press a global hotkey, 
 ## Features
 
 - **Setup wizard** on the first launch: the interface language, how to recognize speech (with a recommendation for this computer), the model or key, the hotkey.
-- **Global hotkey** in two modes.
+- **Global hotkey** in two modes: a key combination or a single mouse button (middle or side).
 - **Local recognition** with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp): Parakeet TDT 0.6B v3, Whisper Large v3, Large v3 Turbo and Medium run on your computer, the audio never leaves it. They run on the GPU through Vulkan (NVIDIA, AMD or Intel) or on the CPU. Models are downloaded and deleted in the settings, and an idle model leaves memory by itself.
 - **Cloud speech-to-text providers:** Groq (Whisper Large v3/v3 Turbo), [Polza.AI](https://polza.ai/), [AssemblyAI](https://www.assemblyai.com/) (Universal-3.5 Pro/Universal-2), and any OpenAI-compatible endpoint. Recordings are sent as FLAC where the service takes it, over a connection opened while you speak.
 - **Local fallback:** if the cloud fails, a downloaded local model transcribes the dictation; the next one goes to the cloud again.

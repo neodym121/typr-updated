@@ -104,6 +104,10 @@ fn key_code(name: &str) -> Option<u8> {
     }
 
     let vk = match name {
+        // A mouse button as the whole hotkey (mouse.rs)
+        "MouseMiddle" => 0x04,
+        "MouseBack" => 0x05,
+        "MouseForward" => 0x06,
         "Space" => 0x20,
         "Enter" | "NumpadEnter" => 0x0D,
         "Tab" => 0x09,
@@ -207,6 +211,7 @@ mod tests {
         assert_eq!(HotkeyKeys::parse("Ctrl+F12").keys, vec![0x7B]);
         assert_eq!(HotkeyKeys::parse("Ctrl+Digit5").keys, vec![0x35]);
         assert_eq!(HotkeyKeys::parse("Ctrl+IntlRo").unknown, 1);
+        assert_eq!(HotkeyKeys::parse("MouseBack").keys, vec![0x05]);
     }
 
     #[test]

@@ -18,6 +18,7 @@ use typr_lib::keyboard::HotkeyKeys;
 use typr_lib::links;
 use typr_lib::local::{runtime::Paths as LocalPaths, LocalEngine, LocalStatus};
 use typr_lib::logger::{self, LogEntry};
+use typr_lib::mouse;
 use typr_lib::overlay::{self, Placement};
 use typr_lib::paste;
 use typr_lib::postprocess::{self, ModelInfo};
@@ -183,9 +184,7 @@ fn set_hotkey_enabled(app: &tauri::AppHandle, enabled: bool) {
             log::info!("Hotkey turned on from the tray");
         }
     } else {
-        if let Err(e) = app.global_shortcut().unregister_all() {
-            log::warn!("Failed to unregister shortcuts: {}", e);
-        }
+        unregister_hotkey(app);
         state.ptt_held.store(false, Ordering::SeqCst);
         // Never paste into whatever is focused now (e.g. a game)
         if state.recorder.cancel_recording(app) {
@@ -623,66 +622,83 @@ fn normalize_hotkey(hotkey: &str) -> String {
     normalized_parts.join("+")
 }
 
-fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), String> {
-    let normalized = normalize_hotkey(hotkey_str);
+/// The hotkey (keys or a mouse button) went down (`pressed`) or up.
+fn on_hotkey(app: &tauri::AppHandle, pressed: bool, hotkey_keys: &HotkeyKeys, name: &str) {
+    let state = app.state::<AppState>();
+    let mode = state.settings.lock().unwrap().recording_mode;
+    let push_to_talk = mode == RecordingMode::PushToTalk;
     let handle = app.clone();
 
+    if pressed {
+        log::debug!("Hotkey pressed: {} (mode: {})", name, mode);
+        // A dictation starts only when nothing but the hotkey is held,
+        // so pressing it by accident along with other keys (e.g. W
+        // while gaming) does nothing. Stopping is never blocked.
+        if state.recorder.get_state() == RecordingState::Ready {
+            let extra = hotkey_keys.extra_keys_held();
+            if !extra.is_empty() {
+                log::info!("Hotkey ignored: other keys are held too ({})", extra.join(", "));
+                return;
+            }
+        }
+        if push_to_talk {
+            state.ptt_held.store(true, Ordering::SeqCst);
+        }
+        tauri::async_runtime::spawn(async move {
+            let state = handle.state::<AppState>();
+            if push_to_talk {
+                push_to_talk_pressed(&handle, state.inner()).await;
+            } else {
+                match do_toggle_recording(&handle, state.inner()).await {
+                    Ok(result) => log::debug!("Toggle result: {}", result),
+                    Err(e) => log::debug!("Toggle: {}", e),
+                }
+            }
+        });
+    } else {
+        log::debug!("Hotkey released: {} (mode: {})", name, mode);
+        if push_to_talk {
+            state.ptt_held.store(false, Ordering::SeqCst);
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                push_to_talk_released(&handle, state.inner()).await;
+            });
+        }
+    }
+}
+
+/// Stops listening to the hotkey, keys and mouse button alike.
+fn unregister_hotkey(app: &tauri::AppHandle) {
     if let Err(e) = app.global_shortcut().unregister_all() {
-        log::warn!("Failed to unregister previous shortcuts: {}", e);
+        log::warn!("Failed to unregister shortcuts: {}", e);
+    }
+    mouse::stop();
+}
+
+/// Listens to `hotkey_str`: a key combination through the global shortcut
+/// plugin, or a single mouse button (MouseMiddle, MouseBack, MouseForward)
+/// through a mouse hook.
+fn register_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), String> {
+    let normalized = normalize_hotkey(hotkey_str);
+    unregister_hotkey(app);
+    let hotkey_keys = HotkeyKeys::parse(&normalized);
+
+    if let Some(button) = mouse::MouseButton::parse(&normalized) {
+        let handle = app.clone();
+        mouse::start(button, move |pressed| on_hotkey(&handle, pressed, &hotkey_keys, button.id()))
+            .map_err(|e| format!("Failed to use {} as the hotkey: {}", button.id(), e))?;
+        log::info!("Mouse button hotkey registered: {}", button.id());
+        return Ok(());
     }
 
     log::info!("Registering global shortcut: {}", normalized);
-    let hotkey_keys = HotkeyKeys::parse(&normalized);
-
-    app.global_shortcut().on_shortcut(normalized.as_str(), move |_app, shortcut, event| {
-        let handle = handle.clone();
-        let state = handle.state::<AppState>();
-        let mode = state.settings.lock().unwrap().recording_mode;
-        let push_to_talk = mode == RecordingMode::PushToTalk;
-
-        match event.state {
-            ShortcutState::Pressed => {
-                log::debug!("Hotkey pressed: {:?} (mode: {})", shortcut, mode);
-                // A dictation starts only when nothing but the hotkey is held,
-                // so pressing it by accident along with other keys (e.g. W
-                // while gaming) does nothing. Stopping is never blocked.
-                if state.recorder.get_state() == RecordingState::Ready {
-                    let extra = hotkey_keys.extra_keys_held();
-                    if !extra.is_empty() {
-                        log::info!(
-                            "Hotkey ignored: other keys are held too ({})",
-                            extra.join(", ")
-                        );
-                        return;
-                    }
-                }
-                if push_to_talk {
-                    state.ptt_held.store(true, Ordering::SeqCst);
-                }
-                tauri::async_runtime::spawn(async move {
-                    let state = handle.state::<AppState>();
-                    if push_to_talk {
-                        push_to_talk_pressed(&handle, state.inner()).await;
-                    } else {
-                        match do_toggle_recording(&handle, state.inner()).await {
-                            Ok(result) => log::debug!("Toggle result: {}", result),
-                            Err(e) => log::debug!("Toggle: {}", e),
-                        }
-                    }
-                });
-            }
-            ShortcutState::Released => {
-                log::debug!("Hotkey released: {:?} (mode: {})", shortcut, mode);
-                if push_to_talk {
-                    state.ptt_held.store(false, Ordering::SeqCst);
-                    tauri::async_runtime::spawn(async move {
-                        let state = handle.state::<AppState>();
-                        push_to_talk_released(&handle, state.inner()).await;
-                    });
-                }
-            }
-        }
-    }).map_err(|e| format!("Failed to register shortcut '{}': {}", normalized, e))?;
+    let handle = app.clone();
+    app.global_shortcut()
+        .on_shortcut(normalized.as_str(), move |_app, shortcut, event| {
+            let name = format!("{:?}", shortcut);
+            on_hotkey(&handle, event.state == ShortcutState::Pressed, &hotkey_keys, &name);
+        })
+        .map_err(|e| format!("Failed to register shortcut '{}': {}", normalized, e))?;
 
     log::info!("Global shortcut registered: {}", normalized);
     Ok(())

@@ -11,6 +11,7 @@ pub mod local;
 pub mod cleanup;
 pub mod i18n;
 pub mod keyboard;
+pub mod mouse;
 pub mod overlay;
 pub mod paste;
 pub mod postprocess;

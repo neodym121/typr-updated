@@ -267,6 +267,7 @@ function applyLanguage(lang: Lang) {
   syncSelect(recognitionLanguage);
   renderUpdate();
   translateSetup();
+  if (currentSettings && !isRecordingHotkey) displayHotkey(currentSettings.hotkey);
 }
 
 /** The interface language picked in General or in the setup */
@@ -277,12 +278,20 @@ function chooseLanguage(lang: Lang) {
   saveQuietly();
 }
 
+/** Mouse buttons that can be the whole hotkey, by MouseEvent.button (mouse.rs) */
+const MOUSE_HOTKEYS: Record<number, string> = { 1: "MouseMiddle", 3: "MouseBack", 4: "MouseForward" };
+const MOUSE_NAMES: Record<string, MessageKey> = {
+  MouseMiddle: "recording.mouseMiddle",
+  MouseBack: "recording.mouseBack",
+  MouseForward: "recording.mouseForward",
+};
+
 function formatKeyForDisplay(key: string): string {
-  const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-  if (key === "Control" || key === "Ctrl" || key === "CmdOrCtrl") return isMac ? "Cmd" : "Ctrl";
+  if (MOUSE_NAMES[key]) return t(MOUSE_NAMES[key]);
+  if (key === "Control" || key === "Ctrl" || key === "CmdOrCtrl") return "Ctrl";
   if (key === "Shift") return "Shift";
   if (key === "Alt") return "Alt";
-  if (key === "Meta" || key === "Super") return isMac ? "Cmd" : "Win";
+  if (key === "Meta" || key === "Super") return "Win";
   if (key === "Space") return "Space";
   if (key.startsWith("Key")) return key.slice(3).toUpperCase();
   if (key.startsWith("Digit")) return key.slice(5);
@@ -920,6 +929,25 @@ function startHotkeyRecording() {
     hotkeyText.textContent = displayList.join("+") + (strokeKeys.size < 2 ? " + ..." : "");
   };
 
+  // Saves the recorded hotkey; a failed save brings the previous one back
+  const saveHotkey = (hotkey: string) => {
+    const previousHotkey = currentSettings.hotkey;
+    currentSettings.hotkey = hotkey;
+    hotkeyText.textContent = formatHotkey(hotkey);
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("keyup", onKeyUp, true);
+    window.removeEventListener("mousedown", onMouseDown, true);
+    saveSettings()
+      .then(() => {
+        cleanup();
+      })
+      .catch(() => {
+        currentSettings.hotkey = previousHotkey;
+        hotkeyText.textContent = t("recording.saveError");
+        setTimeout(() => cleanup(), 1200);
+      });
+  };
+
   const onKeyUp = (e: KeyboardEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -936,19 +964,7 @@ function startHotkeyRecording() {
         if (bMod !== -1) return 1;
         return a.localeCompare(b);
       });
-
-      const previousHotkey = currentSettings.hotkey;
-      currentSettings.hotkey = sorted.join("+");
-
-      saveSettings()
-        .then(() => {
-          cleanup();
-        })
-        .catch(() => {
-          currentSettings.hotkey = previousHotkey;
-          hotkeyText.textContent = t("recording.saveError");
-          setTimeout(() => cleanup(), 1200);
-        });
+      saveHotkey(sorted.join("+"));
       return;
     }
 
@@ -966,7 +982,16 @@ function startHotkeyRecording() {
     }
   };
 
-  const onOutsideClick = (e: MouseEvent) => {
+  // The middle or a side mouse button becomes the hotkey on its own;
+  // any other click outside the button cancels
+  const onMouseDown = (e: MouseEvent) => {
+    const mouseHotkey = MOUSE_HOTKEYS[e.button];
+    if (mouseHotkey && pressedKeys.size === 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      saveHotkey(mouseHotkey);
+      return;
+    }
     if (!hotkeyBtn.contains(e.target as Node)) {
       cleanup();
     }
@@ -977,15 +1002,20 @@ function startHotkeyRecording() {
     hotkeyBtn.classList.remove("recording");
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("keyup", onKeyUp, true);
-    window.removeEventListener("mousedown", onOutsideClick, true);
+    window.removeEventListener("mousedown", onMouseDown, true);
     hotkeyHint.textContent = t("recording.hotkeyHint");
     displayHotkey(currentSettings.hotkey);
   };
 
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("keyup", onKeyUp, true);
-  window.addEventListener("mousedown", onOutsideClick, true);
+  window.addEventListener("mousedown", onMouseDown, true);
 }
+
+// The side mouse buttons never navigate the settings page back or forward
+window.addEventListener("mouseup", (e) => {
+  if (e.button === 3 || e.button === 4) e.preventDefault();
+});
 
 hotkeyBtn.addEventListener("click", () => {
   startHotkeyRecording();

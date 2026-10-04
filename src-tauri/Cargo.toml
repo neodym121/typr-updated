@@ -42,7 +42,8 @@ tar = "0.4"
 flacenc = { version = "0.5", default-features = false }
 
 # Native recording overlay (layered window drawn without a WebView), the
-# keyboard state check for the hotkey, the GPU list for local recognition,
+# keyboard state check and the mouse button hook for the hotkey, the GPU
+# list for local recognition,
 # the start-with-Windows entry and opening links in the browser
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -50,6 +51,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
   "Win32_System_Registry",
+  "Win32_System_Threading",
   "Win32_UI_Shell",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
