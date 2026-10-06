@@ -28,3 +28,6 @@ target/
 
 # Installers downloaded from the GitHub Actions artifact
 typr-windows/
+
+# Launch videos made with /brag
+brag-output*/
