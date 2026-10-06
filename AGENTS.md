@@ -19,8 +19,8 @@ typr/
 │   └── style.css               # Global styles
 ├── src-tauri/                  # Rust backend (Tauri)
 │   └── src/
-│       ├── lib.rs              # App entry — registers Tauri plugins, wires commands
-│       ├── main.rs             # Binary entry point
+│       ├── lib.rs              # Declares the modules (crate `typr_lib`, used by main.rs and tests/)
+│       ├── main.rs             # App entry: Tauri builder, commands, AppState, tray, hotkey, applying settings
 │       ├── recorder.rs         # Orchestrates recording → transcription → paste flow, local fallback
 │       ├── audio.rs            # Low-level audio capture (cpal), WAV/FLAC packing in memory
 │       ├── transcribe_groq.rs  # Groq Whisper API client
@@ -209,7 +209,7 @@ git push origin v0.x.0
 
 - **Frontend changes** (UI, styles, overlay): edit files in `src/`. The Tauri webview reloads automatically in dev mode.
 - **Backend changes** (audio, transcription, settings): edit files in `src-tauri/src/`. Rust is compiled; always run `cargo check` after edits.
-- **Adding a new transcription engine**: create a new `transcribe_<name>.rs` module, add it to `lib.rs`, and wire it in the `match settings.engine.as_str()` block in `recorder.rs`.
+- **Adding a new transcription engine**: create a new `transcribe_<name>.rs` module, add it to `lib.rs` and add an `Engine` variant in `settings.rs`; the compiler then points at the matches to extend (`Engine::label`, and `transcribe`, `upload_format`, `warm_up_connections` in `recorder.rs`). The tray lists `Engine::ALL` by itself. In the UI: the engine button and its settings block in `index.html`, `setEngine` in `main.ts`, `EngineId`/`ENGINES` in `setup.ts`, strings in `i18n.ts`.
 - **Settings changes**: update both the `Settings` struct in `settings.rs` and the corresponding form fields in `src/main.ts`.
 - **Never hardcode API keys.** They are stored in `config.json` in the user's app data directory, not in the source tree.
 - **Do not commit** `node_modules/`, `dist/`, or `src-tauri/target/`. These are covered by `.gitignore`.
