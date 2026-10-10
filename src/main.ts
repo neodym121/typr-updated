@@ -208,13 +208,26 @@ navItems.forEach((item) => {
   item.addEventListener("click", () => showSection(item.dataset.section || "general"));
 });
 
-// Window drag — the sidebar's empty space
-const sidebar = document.getElementById("sidebar")!;
+// The window has no system title bar. Drag it by the empty space of the
+// sidebar, the strip above the content and the setup's header
 const appWindow = getCurrentWindow();
 
-sidebar.addEventListener("mousedown", (e) => {
-  if ((e.target as HTMLElement).closest("button, select, input, a, label, .nav-item, #status-detail")) return;
+document.addEventListener("mousedown", (e) => {
+  const target = e.target as HTMLElement;
+  if (e.button !== 0 || !target.closest(".drag-region")) return;
+  if (target.closest("button, select, input, a, label, .nav-item, #status-detail")) return;
   appWindow.startDragging();
+});
+
+document.getElementById("window-minimize")!.addEventListener("click", () => appWindow.minimize());
+// Like the system button: the window and its WebView go, Typr stays in the tray
+document.getElementById("window-close")!.addEventListener("click", () => appWindow.close());
+
+// A hairline under the strip once the section is scrolled
+const contentArea = document.getElementById("content")!;
+const titlebar = document.getElementById("titlebar")!;
+contentArea.addEventListener("scroll", () => titlebar.classList.toggle("scrolled", contentArea.scrollTop > 0), {
+  passive: true,
 });
 
 let currentSettings: Settings;

@@ -125,6 +125,9 @@ Saves the clipboard (text, else image, else nothing), sets the dictated text wit
 ### `dropdown.ts`
 `enhanceSelect(select)` hides a native `<select>` and draws an app-styled button and list over it; the `<select>` stays the source of truth (`.value`, `change` events), option rebuilds are picked up by a `MutationObserver`, and after setting `.value` from code call `syncSelect(select)`. New `<select>`s should be enhanced too.
 
+### Main window frame
+The main window has no system title bar (`decorations: false` in tauri.conf.json) and can't be maximized (`maximizable: false`: no button, no double-click or snap to the top). Typr draws its own minimize and close buttons (`.window-controls` in `index.html`), fixed in the top-right corner above everything, the setup too. Elements with the `drag-region` class (the sidebar, the strip above the content, the setup's top strip and header) drag the window from their empty space through `startDragging` in `main.ts`; buttons, inputs and labels inside them don't. Close works like the system button did: the window and its WebView go, Typr stays in the tray. Tauri keeps the edges resizable; `tint_window_border` (main.rs) paints the 1 px border Windows 11 still draws in the app's grey instead of the accent colour.
+
 ### `mouse.rs` — a mouse button as the hotkey
 `register_hotkey` (main.rs) sends key combinations to the global shortcut plugin and a mouse hotkey to `mouse::start`: a `WH_MOUSE_LL` hook on its own thread with a message loop. The hook proc only matches the bound button (ignoring injected clicks), swallows it (so "back" doesn't navigate the browser) and hands press/release to a handler thread; both paths end in `on_hotkey`. The hook exists only while a mouse hotkey is active (`unregister_hotkey` removes it, e.g. when the hotkey is turned off in the tray). The left and right buttons can't be the hotkey.
 

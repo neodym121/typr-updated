@@ -50,6 +50,9 @@ const en = {
 
   "sidebar.update": "Update to {version}",
 
+  "window.minimize": "Minimize",
+  "window.close": "Close",
+
   "engine.title": "Engine",
   "engine.desc": "A local model or a cloud service turns your speech into text",
   "engine.local": "Local",
@@ -267,6 +270,9 @@ const ru: Record<MessageKey, string> = {
   "general.setupRun": "Открыть",
 
   "sidebar.update": "Обновить до {version}",
+
+  "window.minimize": "Свернуть",
+  "window.close": "Закрыть",
 
   "engine.title": "Распознавание",
   "engine.desc": "Локальная модель или облачный сервис превращает речь в текст",

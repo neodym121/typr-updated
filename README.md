@@ -41,15 +41,15 @@ Typr is a lightweight desktop dictation app for Windows. Press a global hotkey, 
 - **Starts with Windows** (optional) and **checks GitHub for new releases.**
 - **Tiny footprint:** about 5 MB of RAM in the tray! The settings window's WebView is released when it's closed, and the recording indicator is drawn natively.
 - **Developer mode:** a live log of everything the app does, for troubleshooting.
-- **English and Russian interface**, dark and minimal, in the Anthropic style.
+- **English and Russian interface**, dark and minimal, in the Anthropic style, with its own window buttons instead of the system title bar.
 
 ## Building
 
 The installer is built by GitHub Actions (`.github/workflows/build.yml`) when a `v*` tag is pushed or the workflow is started manually:
 
 ```bash
-git tag v2.0.1
-git push origin v2.0.1
+git tag v2.0.2
+git push origin v2.0.2
 ```
 
 Local development needs [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/) 20+:

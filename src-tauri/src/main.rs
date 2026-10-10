@@ -140,12 +140,30 @@ fn build_main_window(app: &tauri::AppHandle) {
             let built = WebviewWindowBuilder::from_config(app, &config).and_then(|builder| builder.build());
             match built {
                 Ok(window) => {
+                    #[cfg(windows)]
+                    tint_window_border(&window);
                     let _ = window.set_focus();
                 }
                 Err(e) => log::error!("Failed to open the main window: {}", e),
             }
         }
         None => log::error!("Main window is missing from tauri.conf.json"),
+    }
+}
+
+/// The main window has no system frame, yet Windows 11 still draws its 1 px
+/// border, in the accent colour when that is on for title bars. Paint it the
+/// app's own grey (--surface-raised) instead.
+#[cfg(windows)]
+fn tint_window_border(window: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+
+    const BORDER: u32 = 0x003a_3d3d; // #3d3d3a as COLORREF (0x00BBGGRR)
+    if let Ok(hwnd) = window.hwnd() {
+        // Windows 10 has no border colour: the call fails and nothing changes
+        unsafe {
+            DwmSetWindowAttribute(hwnd.0, DWMWA_BORDER_COLOR as u32, &BORDER as *const u32 as *const _, 4);
+        }
     }
 }
 
